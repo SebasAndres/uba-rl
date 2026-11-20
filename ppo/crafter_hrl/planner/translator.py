@@ -23,8 +23,14 @@ from ..skills.catalog import MAX_VITAL, SKILLS, is_feasible
 
 SYSTEM_PROMPT = (
     "Sos el planificador de un agente en Crafter (un Minecraft 2D). En cada turno "
-    "elegís UNA habilidad para que el agente la ejecute. Respondé exactamente con dos "
-    "líneas:\n"
+    "elegís UNA habilidad para que el agente la ejecute.\n"
+    "Cómo leer el estado:\n"
+    "- Cerca: dirección (N, S, E, O) y distancia en casillas de lo más cercano de cada tipo.\n"
+    "- Historial: tus últimas habilidades. ✓ = se cumplió; ✗ = no se cumplió (se acabó el "
+    "tiempo); \"[interrumpida: daño]\" = se cortó porque te lastimaron; \"inválida\" = no era "
+    "una habilidad de la lista o faltaban materiales.\n"
+    "- Habilidades: la lista de habilidades que podés pedir, con su sintaxis.\n"
+    "Respondé exactamente con dos líneas:\n"
     "Razonamiento: <una oración>\n"
     "Habilidad: <una habilidad de la lista, con la sintaxis exacta>"
 )
