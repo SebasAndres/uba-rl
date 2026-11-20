@@ -137,6 +137,27 @@ def encode(skill: Skill) -> np.ndarray:
     return vec
 
 
+def time_left(skill: Skill, step: int) -> np.ndarray:
+    """Fracción del timeout que le queda a la habilidad (entrada del agente PPO).
+
+    Se normaliza por `skill.timeout` para que tenga el mismo significado en
+    todas las habilidades aunque tengan timeouts distintos.
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad en ejecución.
+    step : int
+        Acciones primitivas ya tomadas en esta habilidad.
+
+    Returns
+    -------
+    np.ndarray
+        Vector float32 de largo 1 con valor en [0, 1] (1 = recién empieza).
+    """
+    return np.array([max(0.0, 1.0 - step / skill.timeout)], np.float32)
+
+
 def succeeded(skill: Skill, prev_achievements: dict, achievements: dict) -> bool:
     """Indica si la habilidad se cumplió entre dos instantes.
 

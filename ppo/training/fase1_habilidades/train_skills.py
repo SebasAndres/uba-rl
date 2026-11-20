@@ -4,8 +4,8 @@ ESQUELETO: el setup (entornos, red, buffers, logging, checkpoint) está hecho;
 el loop de PPO está marcado con TODO. Referencia línea por línea:
     ../../../cleanrl/cleanrl/ppo_atari.py   (loop: L202-L320)
 Diferencias con ppo_atari.py:
-    - la observación es un Dict {"image", "goal"}: hay dos buffers en vez de uno,
-    - la red es crafter_hrl.skills.policy.SkillAgent (CNN + goal_vec),
+    - la observación es un Dict {"image", "goal", "time"}: hay tres buffers en vez de uno,
+    - la red es crafter_hrl.skills.policy.SkillAgent (CNN + goal_vec + fracción de tiempo),
     - el checkpoint se guarda con save_skill_policy (lo lee scripts/play.py).
 
 Uso:
@@ -80,6 +80,7 @@ class RolloutBuffers:
 
     images: torch.Tensor
     goals: torch.Tensor
+    times: torch.Tensor
     actions: torch.Tensor
     logprobs: torch.Tensor
     rewards: torch.Tensor
@@ -108,6 +109,7 @@ class RolloutBuffers:
         return cls(
             images=torch.zeros((*shape, 64, 64, 3), dtype=torch.uint8, device=device),
             goals=torch.zeros((*shape, GOAL_DIM), device=device),
+            times=torch.zeros((*shape, 1), device=device),
             actions=torch.zeros(shape, device=device),
             logprobs=torch.zeros(shape, device=device),
             rewards=torch.zeros(shape, device=device),
@@ -220,23 +222,27 @@ def train(args: Args) -> None:
     next_obs, _ = envs.reset(seed=args.seed)
     next_image = torch.as_tensor(next_obs["image"], device=device)  # noqa: F841
     next_goal = torch.as_tensor(next_obs["goal"], device=device)  # noqa: F841
+    next_time = torch.as_tensor(next_obs["time"], device=device)  # noqa: F841
     next_done = torch.zeros(args.num_envs, device=device)  # noqa: F841
 
     for iteration in range(1, args.num_iterations + 1):
         # TODO(A) 1. Annealing del learning rate (ppo_atari.py L204-L207).
 
         # TODO(A) 2. Rollout de num_steps pasos (ppo_atari.py L209-L232):
-        #   - guardar buffers.images[step], buffers.goals[step], buffers.dones[step]
-        #   - agent.get_action_and_value(next_image, next_goal) sin gradiente
+        #   - guardar buffers.images[step], buffers.goals[step], buffers.times[step], buffers.dones[step]
+        #   - agent.get_action_and_value(next_image, next_goal, next_time) sin gradiente
         #   - envs.step(...) ; next_done = terminated | truncated
         #   - loguear éxito por habilidad: infos["skill"], infos["success"] cuando termina
         #     (con gymnasium 0.29 vienen en infos["final_info"]):
         #         success_by_skill[skill].append(success)
-        #   OJO: SkillEnv trunca por timeout de la habilidad. Tratar truncation como
-        #   done es lo que hace CleanRL (simplificación); bootstrapear V(s) en
-        #   truncation es una mejora posible.
+        #   Timeout: como la red ve la fracción de tiempo restante ("time"), el
+        #   timeout es parte de la tarea (también corta la habilidad en el juego)
+        #   y tratarlo como done, como hace CleanRL, es correcto: no hace falta
+        #   bootstrapear. La única truncation "externa" es el fin del mundo de
+        #   Crafter (world_length=10000 pasos), que es rara.
 
         # TODO(A) 3. GAE (ppo_atari.py L234-L246) -> advantages, returns.
+        #   agent.get_value(next_image, next_goal, next_time) para el último estado.
 
         # TODO(A) 4. Aplanar el batch y hacer update_epochs de PPO con minibatches
         #   (ppo_atari.py L248-L320): ratio, clip, value loss (clipeada), entropía,

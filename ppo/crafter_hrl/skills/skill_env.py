@@ -5,7 +5,8 @@ El mundo de Crafter persiste entre habilidades (salvo que el jugador muera o se
 termine el episodio de Crafter), así el inventario progresa naturalmente y no
 pagamos la generación del mundo en cada reset.
 
-Observación: {"image": uint8 64x64x3, "goal": float32 GOAL_DIM}
+Observación: {"image": uint8 64x64x3, "goal": float32 GOAL_DIM, "time": float32 (1,)}
+("time" = fracción del timeout que queda, ver `catalog.time_left`).
 Recompensa (IDEA.md): +1 si se cumple la habilidad, -0.01 por paso.
 """
 
@@ -17,7 +18,7 @@ import numpy as np
 from ..env import CrafterEnv
 from ..env.constants import NUM_ACTIONS
 from ..env.perception import is_near
-from .catalog import GOAL_DIM, SKILLS, Skill, encode, is_feasible, stations_needed, succeeded
+from .catalog import GOAL_DIM, SKILLS, Skill, encode, is_feasible, stations_needed, succeeded, time_left
 
 # Inventario "de regalo" para practicar habilidades avanzadas (curriculum): ítem -> (min, max).
 DEFAULT_BOOST = {"wood": (0, 6), "stone": (0, 6), "coal": (0, 3), "iron": (0, 2), "sapling": (0, 2),
@@ -67,6 +68,7 @@ class SkillEnv(gym.Env):
         self.observation_space = gym.spaces.Dict({
             "image": gym.spaces.Box(0, 255, (64, 64, 3), np.uint8),
             "goal": gym.spaces.Box(0.0, 1.0, (GOAL_DIM,), np.float32),
+            "time": gym.spaces.Box(0.0, 1.0, (1,), np.float32),
         })
         self.action_space = gym.spaces.Discrete(NUM_ACTIONS)
         self._world_alive = False
@@ -90,7 +92,7 @@ class SkillEnv(gym.Env):
         Returns
         -------
         observation : dict
-            {"image": imagen RGB, "goal": goal_vec}.
+            {"image": imagen RGB, "goal": goal_vec, "time": fracción de timeout restante}.
         info : dict
             {"skill": nombre de la habilidad}.
         """
@@ -117,7 +119,7 @@ class SkillEnv(gym.Env):
         Returns
         -------
         observation : dict
-            {"image": imagen RGB, "goal": goal_vec}.
+            {"image": imagen RGB, "goal": goal_vec, "time": fracción de timeout restante}.
         reward : float
             Recompensa de la fase 1.
         terminated : bool
@@ -159,9 +161,10 @@ class SkillEnv(gym.Env):
         Returns
         -------
         dict
-            {"image": imagen RGB, "goal": goal_vec de la habilidad actual}.
+            {"image": imagen RGB, "goal": goal_vec de la habilidad actual,
+            "time": fracción de su timeout que queda}.
         """
-        return {"image": self._obs, "goal": encode(self.skill)}
+        return {"image": self._obs, "goal": encode(self.skill), "time": time_left(self.skill, self._t)}
 
     def _boost_inventory(self) -> None:
         """Regala un inventario aleatorio (dentro de `self.boost`) para el curriculum."""

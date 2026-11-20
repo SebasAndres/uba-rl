@@ -7,8 +7,8 @@ Responsable: **A** (con B para el catálogo).
 | Archivo | Contenido |
 |---|---|
 | `catalog.py` | **Contrato**: las 19 habilidades, `encode()` → `goal_vec` (22 dims = verbo 7 + objeto 12 + material 3), chequeo de éxito, requisitos de inventario, timeouts. |
-| `skill_env.py` | `SkillEnv`: entorno gymnasium de la **fase 1**. Obs `{"image", "goal"}`, 17 acciones, recompensa +1 al cumplir / −0.01 por paso, timeout 100 (300 para dormir). Sortea sólo habilidades factibles y regala inventario con prob. `boost_prob` para practicar las avanzadas. |
-| `policy.py` | `SkillAgent` (CNN Nature + goal_vec → actor/crítico), `save_skill_policy`/`load_skill_policy`, y `PPOSkillPolicy` (el agente congelado que usa el juego). |
+| `skill_env.py` | `SkillEnv`: entorno gymnasium de la **fase 1**. Obs `{"image", "goal", "time"}` (`time` = fracción del timeout que queda), 17 acciones, recompensa +1 al cumplir / −0.01 por paso, timeout 100 (300 para dormir). Sortea sólo habilidades factibles y regala inventario con prob. `boost_prob` para practicar las avanzadas. |
+| `policy.py` | `SkillAgent` (CNN Nature + goal_vec + fracción de timeout restante → actor/crítico), `save_skill_policy`/`load_skill_policy`, y `PPOSkillPolicy` (el agente congelado que usa el juego). |
 | `scripted.py` | `ScriptedSkillPolicy`: BFS sobre el mapa semántico. Fallback mientras no haya agente entrenado y baseline de la ablación. |
 | `executor.py` | `run_skill()`: ejecuta una habilidad hasta cumplirla, morir, timeout o `stop_fn`. |
 

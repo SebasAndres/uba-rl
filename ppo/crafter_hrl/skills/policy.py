@@ -5,8 +5,13 @@ y el script de juego (scripts/play.py). Si se cambia la arquitectura, hay que
 mantener `save_skill_policy` / `load_skill_policy` compatibles.
 
 Arquitectura base (a decidir/ajustar por A): CNN estilo Nature (como
-cleanrl/ppo_atari.py) sobre la imagen 64x64x3, concatenada con el goal_vec,
-y dos cabezas: actor (17 logits) y crítico (1 valor).
+cleanrl/ppo_atari.py) sobre la imagen 64x64x3, concatenada con un MLP sobre
+[goal_vec | fracción de timeout restante], y dos cabezas: actor (17 logits) y
+crítico (1 valor).
+
+La fracción de tiempo hace que el timeout de la habilidad sea observable: sin
+ella el mismo frame vale distinto en el paso 5 que en el 95 y el crítico no
+puede distinguirlo (Pardo et al. 2018, "Time Limits in RL").
 """
 
 from pathlib import Path
@@ -18,10 +23,11 @@ import torch.nn as nn
 from torch.distributions import Categorical
 
 from ..env.constants import NUM_ACTIONS
-from .catalog import GOAL_DIM, Skill, encode
+from .catalog import GOAL_DIM, Skill, encode, time_left
 
 CNN_OUT_DIM = 64 * 4 * 4
 GOAL_EMBED_DIM = 64
+TIME_DIM = 1  # fracción de timeout restante
 
 
 def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
@@ -47,7 +53,7 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
 
 
 class SkillAgent(nn.Module):
-    """Red actor-crítico condicionada a la habilidad: CNN(imagen) + MLP(goal_vec).
+    """Red actor-crítico condicionada a la habilidad: CNN(imagen) + MLP(goal_vec, tiempo).
 
     Parameters
     ----------
@@ -67,12 +73,12 @@ class SkillAgent(nn.Module):
             layer_init(nn.Conv2d(64, 64, 3, stride=1)), nn.ReLU(),    # 64x4x4
             nn.Flatten(),
         )
-        self.goal = nn.Sequential(layer_init(nn.Linear(goal_dim, GOAL_EMBED_DIM)), nn.ReLU())
+        self.goal = nn.Sequential(layer_init(nn.Linear(goal_dim + TIME_DIM, GOAL_EMBED_DIM)), nn.ReLU())
         self.trunk = nn.Sequential(layer_init(nn.Linear(CNN_OUT_DIM + GOAL_EMBED_DIM, hidden)), nn.ReLU())
         self.actor = layer_init(nn.Linear(hidden, num_actions), std=0.01)
         self.critic = layer_init(nn.Linear(hidden, 1), std=1.0)
 
-    def features(self, image: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+    def features(self, image: torch.Tensor, goal: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
         """Representación compartida por actor y crítico.
 
         Parameters
@@ -81,6 +87,8 @@ class SkillAgent(nn.Module):
             Imágenes (B, 64, 64, 3) uint8.
         goal : torch.Tensor
             goal_vecs (B, goal_dim).
+        time : torch.Tensor
+            Fracción de timeout restante (B, 1), en [0, 1].
 
         Returns
         -------
@@ -88,9 +96,9 @@ class SkillAgent(nn.Module):
             Features (B, hidden).
         """
         pixels = image.permute(0, 3, 1, 2).float() / 255.0  # -> (B, 3, 64, 64) en [0, 1]
-        return self.trunk(torch.cat([self.cnn(pixels), self.goal(goal)], dim=1))
+        return self.trunk(torch.cat([self.cnn(pixels), self.goal(torch.cat([goal, time], dim=1))], dim=1))
 
-    def get_value(self, image: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
+    def get_value(self, image: torch.Tensor, goal: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
         """Valor V(s, g) del crítico.
 
         Parameters
@@ -99,15 +107,17 @@ class SkillAgent(nn.Module):
             Imágenes (B, 64, 64, 3) uint8.
         goal : torch.Tensor
             goal_vecs (B, goal_dim).
+        time : torch.Tensor
+            Fracción de timeout restante (B, 1), en [0, 1].
 
         Returns
         -------
         torch.Tensor
             Valores (B, 1).
         """
-        return self.critic(self.features(image, goal))
+        return self.critic(self.features(image, goal, time))
 
-    def get_action_and_value(self, image: torch.Tensor, goal: torch.Tensor,
+    def get_action_and_value(self, image: torch.Tensor, goal: torch.Tensor, time: torch.Tensor,
                              action: torch.Tensor | None = None
                              ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Muestrea (o evalúa) una acción y calcula su log-prob, la entropía y el valor.
@@ -118,6 +128,8 @@ class SkillAgent(nn.Module):
             Imágenes (B, 64, 64, 3) uint8.
         goal : torch.Tensor
             goal_vecs (B, goal_dim).
+        time : torch.Tensor
+            Fracción de timeout restante (B, 1), en [0, 1].
         action : torch.Tensor or None, optional
             Acciones a evaluar; si es None se muestrean.
 
@@ -132,7 +144,7 @@ class SkillAgent(nn.Module):
         value : torch.Tensor
             Valores del crítico (B, 1).
         """
-        hidden = self.features(image, goal)
+        hidden = self.features(image, goal, time)
         dist = Categorical(logits=self.actor(hidden))
         if action is None:
             action = dist.sample()
@@ -154,7 +166,7 @@ def save_skill_policy(agent: SkillAgent, path: str | Path, **metadata: Any) -> N
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": agent.state_dict(), "goal_dim": GOAL_DIM,
-                "num_actions": NUM_ACTIONS, "metadata": metadata}, path)
+                "num_actions": NUM_ACTIONS, "time_dim": TIME_DIM, "metadata": metadata}, path)
 
 
 def load_skill_policy(path: str | Path, device: str = "cpu") -> SkillAgent:
@@ -175,12 +187,16 @@ def load_skill_policy(path: str | Path, device: str = "cpu") -> SkillAgent:
     Raises
     ------
     ValueError
-        Si el checkpoint se entrenó con otro catálogo de habilidades (otro GOAL_DIM).
+        Si el checkpoint se entrenó con otro catálogo de habilidades (otro GOAL_DIM)
+        o con una arquitectura sin la entrada de tiempo.
     """
     ckpt = torch.load(path, map_location=device)
     if ckpt["goal_dim"] != GOAL_DIM:
         raise ValueError(f"El checkpoint usa goal_dim={ckpt['goal_dim']} pero el catálogo "
                          f"actual tiene {GOAL_DIM}: ¿cambió skills/catalog.py?")
+    if ckpt.get("time_dim") != TIME_DIM:
+        raise ValueError("El checkpoint es de antes de agregar la fracción de tiempo como entrada: "
+                         "reentrenar, o regenerar el dummy con `python scripts/crear_dummies.py --force`.")
     agent = SkillAgent(ckpt["goal_dim"], ckpt["num_actions"]).to(device)
     agent.load_state_dict(ckpt["state_dict"])
     agent.eval()
@@ -206,19 +222,23 @@ class PPOSkillPolicy:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.greedy = greedy
         self.agent = load_skill_policy(path, self.device)
+        self._step = 0
 
     def reset(self, skill: Skill) -> None:
-        """No hace nada: la red no es recurrente (con un LSTM acá se resetea el estado).
+        """Reinicia el contador de pasos de la habilidad (con un LSTM, acá se resetea el estado).
 
         Parameters
         ----------
         skill : Skill
             Habilidad que se va a ejecutar.
         """
+        self._step = 0
 
     @torch.no_grad()
     def act(self, env: Any, obs: np.ndarray, info: dict, skill: Skill) -> int:
-        """Elige una acción primitiva a partir de la imagen y el goal_vec de la habilidad.
+        """Elige una acción primitiva a partir de la imagen, el goal_vec y el tiempo restante.
+
+        El tiempo se calcula igual que en `SkillEnv`: `time_left(skill, pasos ya tomados)`.
 
         Parameters
         ----------
@@ -238,7 +258,9 @@ class PPOSkillPolicy:
         """
         image = torch.as_tensor(obs, device=self.device).unsqueeze(0)
         goal = torch.as_tensor(encode(skill), device=self.device).unsqueeze(0)
-        logits = self.agent.actor(self.agent.features(image, goal))
+        time = torch.as_tensor(time_left(skill, self._step), device=self.device).unsqueeze(0)
+        self._step += 1
+        logits = self.agent.actor(self.agent.features(image, goal, time))
         if self.greedy:
             return int(logits.argmax(dim=-1).item())
         return int(Categorical(logits=logits).sample().item())
