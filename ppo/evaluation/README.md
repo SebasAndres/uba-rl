@@ -8,7 +8,7 @@ pasos, muertes e inválidas por misión, tasas de logros y Crafter score.
 
 ```bash
 python evaluation/evaluate.py --planner oracle   --skills scripted --episodes 20
-python evaluation/evaluate.py --planner zeroshot --skills scripted --split test
+python evaluation/evaluate.py --planner llm --adapter checkpoints/llm/dummy --skills scripted --split test   # zero-shot
 python evaluation/evaluate.py --planner llm --adapter checkpoints/llm/sft --skills ppo
 python evaluation/evaluate.py --planner llm --adapter checkpoints/llm/ppo --skills ppo
 ```
@@ -30,7 +30,7 @@ python evaluation/evaluate.py --planner llm --adapter checkpoints/llm/ppo --skil
 |---|---|---|
 | PPO plano 1M | — | — (`training/baseline_ppo_plano`) |
 | Oráculo (techo scripteado) | oracle | scripted / ppo |
-| LLM zero-shot | zeroshot | ppo |
+| LLM zero-shot | llm + dummy | ppo |
 | LLM SFT | llm + sft | ppo |
 | LLM SFT + PPO | llm + ppo | ppo |
 | Ablación | mejor LLM | scripted vs ppo |

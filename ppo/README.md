@@ -32,17 +32,21 @@ misión ─► LLM ─► "recolectar(madera)" ─► parser ─► goal_vec ─
 | PPO del LLM | 🟡 esqueleto |
 | Baseline PPO plano | 🟡 esqueleto |
 
-`play.py` **supone los modelos entrenados** (busca `checkpoints/`). Si no los
-encuentra, avisa y usa los equivalentes scripteados (oráculo + habilidades con
-BFS), así el loop completo corre desde hoy y nadie queda bloqueado.
+`play.py` usa por defecto **los modelos** (`--planner llm --skills ppo`) cargados
+desde `checkpoints/`. No hay fallback automático: si faltan los checkpoints, falla.
+Antes de entrenar hay que crear checkpoints **dummy** (pesos aleatorios / LoRA sin
+entrenar) con `scripts/crear_dummies.py`; entrenar = sobrescribirlos. Para correr
+el loop sin modelos, pedir las versiones scripteadas explícitamente
+(`--planner oracle --skills scripted`).
 
 ## Instalación
 
 ```bash
 cd ppo
 uv sync                  # crea .venv (Python 3.11) con entorno + fase 1
-uv sync --extra llm      # + LLM (fase 2)
-uv run python scripts/play.py ...   # o: source .venv/bin/activate
+uv sync --extra llm      # + LLM (fase 2); necesario para el planner por defecto y para crear_dummies
+uv run python scripts/crear_dummies.py   # crea checkpoints dummy (descarga Qwen2.5-0.5B, ~1 GB la primera vez)
+uv run python scripts/play.py ...        # o: source .venv/bin/activate
 ```
 
 En Colab (sin venv): `uv pip install --system -r pyproject.toml --extra llm`.
@@ -53,11 +57,12 @@ cada mundo; con numba, ~0,1 s (el primer reset tarda unos segundos por la compil
 ## Jugar
 
 ```bash
-python scripts/play.py --mission espada_piedra                 # auto: modelos entrenados o fallback scripteado
+python scripts/play.py --mission espada_piedra                 # LLM + agente PPO (dummies o entrenados)
 python scripts/play.py --mission base --video runs/base.mp4    # guarda video
 python scripts/play.py --window                                # ventana en vivo (pygame)
-python scripts/play.py --planner zeroshot --skills scripted    # Qwen sin entrenar + habilidades scripteadas
-python scripts/play.py --planner llm --adapter checkpoints/llm/ppo --skills ppo   # pipeline final
+python scripts/play.py --planner oracle --skills scripted      # referencia scripteada (sin modelos ni descargas)
+python scripts/play.py --skills scripted                       # LLM + habilidades scripteadas (sin skill_policy.pt)
+python scripts/play.py --adapter checkpoints/llm/sft           # elegir adapter (default: llm/ppo > llm/sft > llm/dummy)
 python scripts/random_episode.py                               # inspeccionar obs/info de Crafter
 ```
 
@@ -98,8 +103,9 @@ ppo/
 │   ├── planner/                 # traductor, parser, oráculo, LLM                              → README
 │   ├── missions/                # misiones, chequeos de éxito, split train/test                 → README
 │   ├── planner_env.py           # loop jerárquico = entorno de la fase 2
-│   └── factory.py               # arma planner/agente desde flags ("auto" = checkpoint o fallback)
+│   └── factory.py               # arma planner/agente desde flags y checkpoints
 ├── scripts/
+│   ├── crear_dummies.py         # checkpoints sin entrenar para correr el pipeline antes de entrenar
 │   ├── play.py                  # ▶ jugar una misión con el pipeline completo
 │   └── random_episode.py
 ├── training/                    # dónde se entrena cada modelo                                 → README

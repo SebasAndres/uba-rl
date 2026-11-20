@@ -42,6 +42,6 @@ Habilidad: fabricar(espada, piedra)
 - [ ] Reglas del oráculo para cada misión compuesta nueva.
 
 **C — LLM**
-- [ ] Medir el zero-shot (`--planner zeroshot`) con 0.5B y 1.5B: % de respuestas
+- [ ] Medir el zero-shot (`--planner llm --adapter checkpoints/llm/dummy`) con 0.5B y 1.5B: % de respuestas
       parseables y éxito por misión. Es la primera fila de la comparación.
 - [ ] Decidir `max_new_tokens` / temperatura para entrenamiento (muestreo) vs evaluación (greedy).
