@@ -41,6 +41,21 @@ from crafter_hrl.render import Renderer  # noqa: E402
 from crafter_hrl.skills import SkillPolicy  # noqa: E402
 
 INDENT = "   "
+WIDTH = 78  # ancho de los separadores
+
+
+def print_section(title: str, body: str) -> None:
+    """Imprime una sección de un turno: título con separador y cuerpo indentado.
+
+    Parameters
+    ----------
+    title : str
+        Título de la sección.
+    body : str
+        Contenido (puede ser multilínea).
+    """
+    print(f"\n{INDENT}── {title} " + "─" * max(0, WIDTH - len(INDENT) - len(title) - 4))
+    print(indent(body, INDENT * 2))
 
 
 # ─────────────────────────────────────────────────────────────── argumentos
@@ -229,18 +244,19 @@ def print_turn(env: PlannerEnv, turn: TurnInfo, reward: float, llm_input: str, p
     quiet : bool
         Si es True, sólo se imprime la línea de resumen.
     """
-    print(f"\n══ Turno {env.decisions:3d} │ {turn.skill or '(no parseable)':24s} │ {turn_status(turn):9s}"
-          f" │ r={reward:+.2f} │ t={turn.env_steps}")
+    header = (f" TURNO {env.decisions:3d} │ {turn.skill or '(no parseable)':24s} │ "
+              f"{turn_status(turn):9s} │ r={reward:+.2f} │ t={turn.env_steps}")
     if quiet:
+        print(header)
         return
-    body = INDENT * 2
-    print(f"{INDENT}① Entrada del LLM (system prompt + este texto):\n{indent(llm_input, body)}")
-    print(f"{INDENT}② Salida del LLM:\n{indent(plan_text, body)}")
-    print(f"{body}→ habilidad extraída: {turn.skill or 'ninguna'}"
-          "  (si nombra varias, el parser toma la última después de 'Habilidad:')")
-    print(f"{INDENT}③ Ejecución: {execution_summary(env, turn)}")
-    print(f"{INDENT}④ Estado tras ejecutar:\n{indent(state_after.split(chr(10) + 'Habilidades:')[0], body)}")
-    print(f"{INDENT}⑤ Recompensa: {reward_breakdown(env, turn, reward)}")
+    print(f"\n\n{'═' * WIDTH}\n{header}\n{'═' * WIDTH}")
+    extracted = (f"→ habilidad extraída: {turn.skill or 'ninguna'}\n"
+                 "  (si nombra varias, el parser toma la última después de 'Habilidad:')")
+    print_section("① Entrada del LLM (system prompt + este texto)", llm_input)
+    print_section("② Salida del LLM", f"{plan_text}\n\n{extracted}")
+    print_section("③ Ejecución", execution_summary(env, turn))
+    print_section("④ Estado tras ejecutar", state_after.split("\nHabilidades:")[0])
+    print_section("⑤ Recompensa", reward_breakdown(env, turn, reward))
 
 
 def print_outcome(env: PlannerEnv, last_turn: TurnInfo, total_reward: float) -> None:
@@ -261,13 +277,13 @@ def print_outcome(env: PlannerEnv, last_turn: TurnInfo, total_reward: float) -> 
         outcome = "MURIÓ"
     else:
         outcome = "SIN TIEMPO"
-    print(f"\n{outcome} en {env.decisions} decisiones / {last_turn.env_steps} pasos."
-          f" Retorno = {total_reward:+.2f}")
+    print(f"\n{'█' * WIDTH}\n {outcome} en {env.decisions} decisiones / {last_turn.env_steps} pasos."
+          f"  Retorno = {total_reward:+.2f}\n{'█' * WIDTH}")
 
 
 # ─────────────────────────────────────────────────────────────── episodio
-def play_turn(env: PlannerEnv, llm_planner: Planner, state_text: str,
-              crafter_info: dict) -> tuple[str, float, bool, TurnInfo, str]:
+def play_turn(env: PlannerEnv, llm_planner: Planner, state_text: str, crafter_info: dict,
+              renderer: Renderer) -> tuple[str, float, bool, TurnInfo, str]:
     """Juega UN turno: el LLM elige una habilidad y el agente de RL la ejecuta.
 
     Parameters
@@ -280,6 +296,8 @@ def play_turn(env: PlannerEnv, llm_planner: Planner, state_text: str,
         Estado actual en texto: es la entrada del LLM.
     crafter_info : dict
         `info` crudo de Crafter (sólo lo usan los planificadores scripteados).
+    renderer : Renderer
+        Mantiene viva la ventana mientras el LLM piensa.
 
     Returns
     -------
@@ -294,13 +312,13 @@ def play_turn(env: PlannerEnv, llm_planner: Planner, state_text: str,
     plan_text : str
         Respuesta cruda del LLM.
     """
-  
-    plan = llm_planner.plan(state_text, crafter_info)
+    plan = renderer.run_responsive(llm_planner.plan, state_text, crafter_info)
     next_state_text, reward, terminated, truncated, turn = env.step(plan.text)
     return next_state_text, reward, terminated or truncated, turn, plan.text
 
 
-def run_episode(env: PlannerEnv, llm_planner: Planner, mission: Mission, quiet: bool) -> tuple[TurnInfo, float]:
+def run_episode(env: PlannerEnv, llm_planner: Planner, mission: Mission, quiet: bool,
+                renderer: Renderer) -> tuple[TurnInfo, float]:
     """Juega una misión completa, turno a turno, hasta que el episodio termine.
 
     Cada turno = 1 decisión del LLM + 1 habilidad ejecutada por el agente de RL.
@@ -315,6 +333,8 @@ def run_episode(env: PlannerEnv, llm_planner: Planner, mission: Mission, quiet: 
         Misión a cumplir.
     quiet : bool
         Si es True, no imprime el prompt inicial ni el detalle de cada turno.
+    renderer : Renderer
+        Visualización (mantiene viva la ventana mientras el LLM piensa).
 
     Returns
     -------
@@ -331,7 +351,7 @@ def run_episode(env: PlannerEnv, llm_planner: Planner, mission: Mission, quiet: 
     total_reward, done = 0.0, False
     while not done:
         llm_input = state_text
-        state_text, reward, done, turn, plan_text = play_turn(env, llm_planner, llm_input, crafter_info)
+        state_text, reward, done, turn, plan_text = play_turn(env, llm_planner, llm_input, crafter_info, renderer)
         crafter_info = turn.crafter_info
         total_reward += reward
         print_turn(env, turn, reward, llm_input, plan_text, state_text, quiet)
@@ -380,7 +400,7 @@ def main() -> None:
         )
         print(f"Misión: {mission.text}   [planificador={llm_planner.name}, "
               f"agente de habilidades={skill_agent.name}, seed={args.seed}]")
-        last_turn, total_reward = run_episode(env, llm_planner, mission, args.quiet)
+        last_turn, total_reward = run_episode(env, llm_planner, mission, args.quiet, renderer)
 
     print_outcome(env, last_turn, total_reward)
 

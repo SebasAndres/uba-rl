@@ -7,12 +7,16 @@ salidas: un `VideoRecorder` (.mp4/.gif) y/o una `LiveWindow` (pygame).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 
 from .env import CrafterEnv
+
+T = TypeVar("T")
 
 
 class FrameSink(Protocol):
@@ -124,6 +128,11 @@ class LiveWindow:
         self.pygame.event.pump()
         self.clock.tick(self.fps)
 
+    def idle(self) -> None:
+        """Atiende los eventos de la ventana sin dibujar (evita el "no responde" del SO)."""
+        self.pygame.event.pump()
+        self.clock.tick(self.fps)
+
     def close(self) -> None:
         """Cierra la ventana."""
         self.pygame.quit()
@@ -188,6 +197,36 @@ class Renderer:
         frame = env.render(self.size)
         for sink in self.sinks:
             sink.add(frame)
+
+    def run_responsive(self, fn: Callable[..., T], *args: Any) -> T:
+        """Ejecuta `fn(*args)` manteniendo viva la ventana mientras tanto.
+
+        Las llamadas largas (ej. la generación del LLM) bloquean el hilo
+        principal; sin atender eventos, el SO marca la ventana como "no
+        responde". Acá `fn` corre en otro hilo y el principal sigue atendiendo
+        eventos hasta que termina.
+
+        Parameters
+        ----------
+        fn : callable
+            Función a ejecutar.
+        *args : Any
+            Argumentos de `fn`.
+
+        Returns
+        -------
+        T
+            Lo que devuelva `fn` (si lanza una excepción, se re-lanza acá).
+        """
+        windows = [sink for sink in self.sinks if hasattr(sink, "idle")]
+        if not windows:
+            return fn(*args)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(fn, *args)
+            while not future.done():
+                for window in windows:
+                    window.idle()
+            return future.result()
 
     def close(self) -> None:
         """Cierra todas las salidas (guarda el video, cierra la ventana)."""
