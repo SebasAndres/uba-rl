@@ -40,10 +40,12 @@ BFS), así el loop completo corre desde hoy y nadie queda bloqueado.
 
 ```bash
 cd ppo
-python -m venv .venv && source .venv/bin/activate     # probado con Python 3.11
-pip install -r requirements.txt                       # entorno + fase 1
-pip install -r requirements-llm.txt                   # + LLM (fase 2)
+uv sync                  # crea .venv (Python 3.11) con entorno + fase 1
+uv sync --extra llm      # + LLM (fase 2)
+uv run python scripts/play.py ...   # o: source .venv/bin/activate
 ```
+
+En Colab (sin venv): `uv pip install --system -r pyproject.toml --extra llm`.
 
 `numba` **no es opcional en la práctica**: sin numba Crafter tarda ~2 s en generar
 cada mundo; con numba, ~0,1 s (el primer reset tarda unos segundos por la compilación JIT).

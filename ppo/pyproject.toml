@@ -1,0 +1,30 @@
+[project]
+name = "crafter-hrl"
+version = "0.1.0"
+description = "LLM planificador + agente PPO en Crafter"
+requires-python = ">=3.11,<3.12"  # probado con 3.11
+dependencies = [
+    "crafter==1.8.3",
+    "numba",              # IMPORTANTE: sin numba, opensimplex genera cada mundo en ~2 s (con numba ~0.1 s)
+    "gymnasium==0.29.1",  # la versión que fija CleanRL
+    "numpy",
+    "torch",
+    "tensorboard",
+    "tyro",
+    "imageio[ffmpeg]",    # videos .mp4 (sin ffmpeg, play.py guarda .gif)
+    "pygame",             # opcional: --window en scripts/play.py
+]
+
+[project.optional-dependencies]
+# Fase 2: LLM planificador (zero-shot, SFT, PPO).
+llm = [
+    "transformers",
+    "peft",
+    "trl",
+    "datasets",
+    "accelerate",
+    "bitsandbytes",       # opcional: --load-in-4bit (QLoRA), sólo con GPU NVIDIA
+]
+
+[tool.uv]
+package = false
