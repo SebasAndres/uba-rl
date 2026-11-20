@@ -19,13 +19,54 @@ from dataclasses import dataclass
 
 from ..env.constants import ES, VITALS
 from ..env.perception import closest_per_type, visible
-from ..skills.catalog import MAX_VITAL, SKILLS, is_feasible
+from ..skills.catalog import MAX_VITAL, SKILLS, Skill, is_feasible, missing_requirements, stations_needed
 
 # SALIDA DEL LLM: dos líneas con estos prefijos. La habilidad tiene que ser una
 # de `skills.catalog.SKILLS`, escrita como `str(skill)`. Los usan el prompt de
 # abajo, `format_response` (respuestas del oráculo para el SFT) y `parser.parse_skill`.
 REASONING_PREFIX = "Razonamiento:"
 SKILL_PREFIX = "Habilidad:"
+
+
+def _recipe(skill: Skill) -> str | None:
+    """Requisitos de una habilidad en texto, ej. "usa madera 1, piedra 1; mesa cerca".
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad del catálogo.
+
+    Returns
+    -------
+    str or None
+        Requisitos (herramienta para recolectar, materiales que se consumen al
+        colocar/fabricar, estaciones cerca), o None si no necesita nada.
+    """
+    need = missing_requirements(skill, {})  # inventario vacío = todos los requisitos
+    parts = []
+    if need:
+        verb = "requiere" if skill.verb == "recolectar" else "usa"
+        parts.append(f"{verb} " + ", ".join(f"{ES[item]} {n}" for item, n in need.items()))
+    stations = stations_needed(skill)
+    if stations:
+        parts.append(" y ".join(ES[s] for s in stations) + " cerca")
+    return "; ".join(parts) or None
+
+
+def recipes_text() -> str:
+    """Tabla de requisitos de todas las habilidades (va en el system prompt).
+
+    Se arma desde `crafter.constants` vía el catálogo: sin ella el LLM no puede
+    deducir planes para misiones que no vio en el SFT (ej. pico de hierro).
+
+    Returns
+    -------
+    str
+        Una línea "- habilidad: requisitos" por habilidad que tenga requisitos.
+    """
+    lines = [f"- {skill}: {recipe}" for skill in SKILLS if (recipe := _recipe(skill))]
+    return "\n".join(lines)
+
 
 SYSTEM_PROMPT = (
     "Sos el planificador de un agente en Crafter (un Minecraft 2D). En cada turno "
@@ -36,6 +77,11 @@ SYSTEM_PROMPT = (
     "tiempo); \"[interrumpida: daño]\" = se cortó porque te lastimaron; \"inválida\" = no era "
     "una habilidad de la lista o faltaban materiales.\n"
     "- Habilidades: la lista de habilidades que podés pedir, con su sintaxis.\n"
+    "Requisitos (\"requiere\" = herramienta que tenés que tener; \"usa\" = materiales que se "
+    "gastan; \"cerca\" = tiene que estar a tu lado):\n"
+    f"{recipes_text()}\n"
+    "Si te falta algo, conseguí primero lo que falta (puede encadenarse: para recolectar "
+    "hierro necesitás pico de piedra, que a su vez usa piedra, etc.).\n"
     "Respondé exactamente con dos líneas:\n"
     f"{REASONING_PREFIX} <una oración>\n"
     f"{SKILL_PREFIX} <una habilidad de la lista, con la sintaxis exacta>"

@@ -19,7 +19,7 @@ día 1 con `--skills scripted`. Cuando A tenga el agente, se cambia el flag a `p
 | Carpeta | Script | Estado | Responsable |
 |---|---|---|---|
 | `fase1_habilidades` | `train_skills.py` | esqueleto: setup listo, loop PPO con TODOs | A |
-| `fase2_sft` | `generar_dataset.py` | **funciona** | B |
+| `fase2_sft` | dataset (`data/sft/train.jsonl`) | por implementar (idea en su README) | B |
 | `fase2_sft` | `train_sft.py` | esqueleto (receta TRL en el docstring) | C |
 | `fase2_ppo_llm` | `train_llm_ppo.py` | esqueleto: entorno listo, PPO con TODOs | C |
 | `baseline_ppo_plano` | `train_flat_ppo.py` | esqueleto: wrapper listo, loop con TODO | D |

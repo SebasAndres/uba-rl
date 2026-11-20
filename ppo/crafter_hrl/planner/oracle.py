@@ -2,7 +2,7 @@
 
 Usos:
   - baseline / demo sin LLM,
-  - generar el dataset de SFT (training/fase2_sft/generar_dataset.py),
+  - etiquetar el dataset de SFT (ver training/fase2_sft/README.md),
   - opcional: recompensa de prerrequisitos (+0.2) en PPO.
 
 Se re-evalúa en cada turno mirando el inventario actual, así que se recupera
@@ -17,6 +17,7 @@ from .base import PlannerOutput
 from .translator import format_response
 
 Decision = tuple[Skill, str]  # (habilidad, razonamiento)
+Chain = tuple[str, ...]       # eslabones del razonamiento: de la misión hacia lo que falta
 
 _ITEM_TO_RESOURCE = {"wood": "madera", "stone": "piedra", "coal": "carbon", "iron": "hierro",
                      "diamond": "diamante", "sapling": "brote"}
@@ -26,6 +27,7 @@ _PLACEABLE_ES = {"table": "mesa", "furnace": "horno", "stone": "piedra"}
 _RESOURCE_MATERIAL = {"wood": "tree", "stone": "stone", "coal": "coal", "iron": "iron",
                       "diamond": "diamond", "sapling": "grass"}
 _PLACE_PREFIX = "place_"
+_ARTICLE = {"table": "la mesa", "furnace": "el horno", "stone": "una piedra"}
 
 
 class OraclePlanner:
@@ -99,7 +101,7 @@ class OraclePlanner:
         for kind, name, amount in self.mission.goals:
             have = (inv if kind == "item" else info["achievements"]).get(name, 0)
             if have < amount:
-                return self._resolve(kind, name, info)
+                return self._resolve(kind, name, info, (f"Misión: {_label(name)} ({have}/{amount})",))
         # Goals cumplidos pero no el chequeo compuesto: misión sin regla en el oráculo.
         return Skill("recolectar", "madera"), "No sé cómo avanzar, junto madera."
 
@@ -144,17 +146,20 @@ class OraclePlanner:
         inv, sem, pos = info["inventory"], info["semantic"], info["player_pos"]
         wood_needed = PLACE["table"]["uses"]["wood"]
         stone_needed = PLACE["furnace"]["uses"]["stone"]
+        stone_txt = f"horno usa piedra {stone_needed}, tengo {inv['stone']}"
         if is_near(sem, pos, "table", 2):
             if inv["stone"] >= stone_needed:
-                return Skill("colocar", "horno"), "Tengo la mesa al lado, pongo el horno."
-            return self._resolve("item", "stone", info, why="Me falta piedra para el horno.")
+                return Skill("colocar", "horno"), "Misión: base → tengo la mesa al lado, coloco el horno."
+            return self._resolve("item", "stone", info, ("Misión: base → mesa lista", stone_txt))
         if inv["stone"] < stone_needed:
-            return self._resolve("item", "stone", info, why="Junto piedra para el horno antes de armar la base.")
+            return self._resolve("item", "stone", info, ("Misión: base → junto todo antes de colocar", stone_txt))
         if inv["wood"] < wood_needed:
-            return self._resolve("item", "wood", info, why="Junto madera para la mesa de la base.")
-        return Skill("colocar", "mesa"), "Ya tengo todo: pongo la mesa y al lado el horno."
+            chain = ("Misión: base → junto todo antes de colocar", f"mesa usa madera {wood_needed}, tengo {inv['wood']}")
+            return self._resolve("item", "wood", info, chain)
+        return Skill("colocar", "mesa"), "Misión: base → tengo todo, coloco la mesa y después el horno al lado."
 
-    def _first_missing(self, requirements: dict[str, int], info: dict) -> Decision | None:
+    def _first_missing(self, requirements: dict[str, int], info: dict, chain: Chain,
+                       label: str, verb: str = "usa") -> Decision | None:
         """Resuelve el primer ítem de `requirements` que falte en el inventario.
 
         Parameters
@@ -163,6 +168,12 @@ class OraclePlanner:
             Cantidad necesaria por ítem.
         info : dict
             `info` de Crafter.
+        chain : Chain
+            Razonamiento acumulado hasta acá.
+        label : str
+            Qué necesita esos ítems (ej. "pico de piedra"), para el razonamiento.
+        verb : str, optional
+            "usa" (se consume) o "requiere" (herramienta).
 
         Returns
         -------
@@ -170,12 +181,18 @@ class OraclePlanner:
             Habilidad para conseguir el primer faltante, o None si no falta nada.
         """
         for item, amount in requirements.items():
-            if info["inventory"][item] < amount:
-                return self._resolve("item", item, info)
+            have = info["inventory"][item]
+            if have < amount:
+                step = f"{label} {verb} {ES[item]} {amount}, tengo {have}"
+                return self._resolve("item", item, info, (*chain, step))
         return None
 
-    def _resolve(self, kind: str, name: str, info: dict, why: str | None = None) -> Decision:
+    def _resolve(self, kind: str, name: str, info: dict, chain: Chain = ()) -> Decision:
         """Devuelve la próxima habilidad para conseguir `name` (recursivo sobre prerrequisitos).
+
+        Cada nivel de la recursión agrega un eslabón a `chain`; el razonamiento
+        final es la cadena completa (ej. "Misión: espada de piedra (0/1) → espada
+        de piedra necesita mesa cerca → mesa usa madera 2, tengo 1 → recolecto madera.").
 
         Parameters
         ----------
@@ -185,8 +202,8 @@ class OraclePlanner:
             Ítem o logro de Crafter (ej. "stone_pickaxe", "place_table").
         info : dict
             `info` de Crafter.
-        why : str or None, optional
-            Razonamiento a usar si se termina recolectando un recurso.
+        chain : Chain, optional
+            Razonamiento acumulado hasta acá.
 
         Returns
         -------
@@ -199,14 +216,14 @@ class OraclePlanner:
             Si el oráculo no tiene regla para `name`.
         """
         if kind == "achievement" and name.startswith(_PLACE_PREFIX):
-            return self._resolve_place(name[len(_PLACE_PREFIX):], info)
+            return self._resolve_place(name[len(_PLACE_PREFIX):], info, chain)
         if name in _ITEM_TO_RESOURCE:
-            return self._resolve_resource(name, info, why)
+            return self._resolve_resource(name, info, chain)
         if name in MAKE:
-            return self._resolve_tool(name, info)
+            return self._resolve_tool(name, info, chain)
         raise ValueError(f"El oráculo no sabe conseguir {kind}:{name}")
 
-    def _resolve_place(self, obj: str, info: dict) -> Decision:
+    def _resolve_place(self, obj: str, info: dict, chain: Chain) -> Decision:
         """Colocar `obj` (table/furnace/stone), juntando antes los materiales.
 
         Parameters
@@ -215,18 +232,20 @@ class OraclePlanner:
             Nombre interno de lo que se coloca.
         info : dict
             `info` de Crafter.
+        chain : Chain
+            Razonamiento acumulado hasta acá.
 
         Returns
         -------
         Decision
             Habilidad y razonamiento.
         """
-        missing = self._first_missing(PLACE[obj]["uses"], info)
+        missing = self._first_missing(PLACE[obj]["uses"], info, chain, ES[obj])
         if missing is not None:
             return missing
-        return Skill("colocar", _PLACEABLE_ES[obj]), f"Tengo los materiales para colocar {ES[obj]}."
+        return Skill("colocar", _PLACEABLE_ES[obj]), _close(chain, f"tengo los materiales, coloco {_ARTICLE[obj]}")
 
-    def _resolve_resource(self, item: str, info: dict, why: str | None) -> Decision:
+    def _resolve_resource(self, item: str, info: dict, chain: Chain) -> Decision:
         """Recolectar un recurso básico, consiguiendo antes la herramienta necesaria.
 
         Parameters
@@ -235,20 +254,22 @@ class OraclePlanner:
             Recurso (wood, stone, coal, ...).
         info : dict
             `info` de Crafter.
-        why : str or None
-            Razonamiento a usar; por defecto "Me falta <recurso>.".
+        chain : Chain
+            Razonamiento acumulado hasta acá.
 
         Returns
         -------
         Decision
             Habilidad y razonamiento.
         """
-        missing = self._first_missing(COLLECT[_RESOURCE_MATERIAL[item]]["require"], info)
+        resource = _ITEM_TO_RESOURCE[item]
+        requirements = COLLECT[_RESOURCE_MATERIAL[item]]["require"]
+        missing = self._first_missing(requirements, info, chain, f"recolectar {ES[item]}", verb="requiere")
         if missing is not None:
             return missing
-        return Skill("recolectar", _ITEM_TO_RESOURCE[item]), why or f"Me falta {ES[item]}."
+        return Skill("recolectar", resource), _close(chain, f"recolecto {ES[item]}")
 
-    def _resolve_tool(self, item: str, info: dict) -> Decision:
+    def _resolve_tool(self, item: str, info: dict, chain: Chain) -> Decision:
         """Fabricar una herramienta: estaciones cerca, después materiales, después fabricar.
 
         Parameters
@@ -257,6 +278,8 @@ class OraclePlanner:
             Herramienta (ej. "stone_pickaxe").
         info : dict
             `info` de Crafter.
+        chain : Chain
+            Razonamiento acumulado hasta acá.
 
         Returns
         -------
@@ -266,10 +289,47 @@ class OraclePlanner:
         sem, pos = info["semantic"], info["player_pos"]
         for station in MAKE[item]["nearby"]:
             if not is_near(sem, pos, station, self.station_radius):
-                return self._resolve("achievement", f"{_PLACE_PREFIX}{station}", info)
-        missing = self._first_missing(MAKE[item]["uses"], info)
+                step = f"{ES[item]} necesita {ES[station]} cerca y no hay"
+                return self._resolve("achievement", f"{_PLACE_PREFIX}{station}", info, (*chain, step))
+        missing = self._first_missing(MAKE[item]["uses"], info, chain, ES[item])
         if missing is not None:
             return missing
         material, tool = item.split("_")
         skill = Skill("fabricar", _TOOL_ES[tool], _MAT_ES[material])
-        return skill, f"Tengo todo para fabricar {ES[item]}."
+        return skill, _close(chain, f"tengo todo, fabrico {ES[item]}")
+
+
+def _label(name: str) -> str:
+    """Nombre en castellano de un objetivo de misión (ítem o logro "place_*").
+
+    Parameters
+    ----------
+    name : str
+        Ítem (ej. "stone_sword") o logro (ej. "place_furnace").
+
+    Returns
+    -------
+    str
+        Ej. "espada de piedra", "colocar horno".
+    """
+    if name.startswith(_PLACE_PREFIX):
+        return f"colocar {ES[name[len(_PLACE_PREFIX):]]}"
+    return ES[name]
+
+
+def _close(chain: Chain, decision: str) -> str:
+    """Une la cadena de razonamiento con la decisión final en una oración.
+
+    Parameters
+    ----------
+    chain : Chain
+        Eslabones previos (de la misión hacia el faltante).
+    decision : str
+        Qué se hace ahora.
+
+    Returns
+    -------
+    str
+        Ej. "Misión: horno (0/1) → horno usa piedra 1, tengo 0 → recolecto piedra."
+    """
+    return " → ".join((*chain, decision)) + "."

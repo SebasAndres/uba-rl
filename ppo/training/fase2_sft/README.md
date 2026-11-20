@@ -5,23 +5,34 @@
 Pipeline del LLM (IDEA.md): **zero-shot (baseline) → SFT con planes del oráculo → PPO**.
 El SFT le enseña el formato y un plan razonable; el PPO después mejora sobre eso.
 
-## 1. Dataset (`generar_dataset.py`, ya funciona)
+## 1. Dataset (por implementar: `data/sft/train.jsonl`)
 
-```bash
-python training/fase2_sft/generar_dataset.py --episodes-per-mission 200   # → data/sft/train.jsonl
+**Idea:** jugar con `PlannerEnv` usando el oráculo como profesor y guardar un
+ejemplo por turno, con el MISMO prompt que va a ver el LLM:
+
+```json
+{"prompt": [{"role": "system", ...}, {"role": "user", "content": <state_to_text>}],
+ "completion": [{"role": "assistant", "content": "Razonamiento: ...\nHabilidad: ..."}],
+ "mission": "espada_piedra", "seed": 3, "turn": 5}
 ```
 
-- Corre oráculo + habilidades scripteadas en las misiones de **train** solamente.
-- Un ejemplo por turno, formato conversacional `prompt` / `completion`.
-- Por defecto guarda sólo episodios exitosos (`--keep-failed` para todos).
-- Semillas de train desde 0; la evaluación usa 1000+ (no solapar).
+- Prompt con `build_messages(text)`, respuesta con `OraclePlanner.plan(text, info).text`
+  (ya trae el razonamiento encadenado: misión → faltante → ... → decisión).
+- Sólo misiones de **train**; semillas desde 0 (la evaluación usa 1000+).
+- **Perturbaciones (DAgger)**: en ~15% de los turnos ejecutar otra habilidad (al azar
+  o cortada) en vez de la del oráculo, pero etiquetar con lo que el oráculo diría
+  en el estado que resulta. Así entran historiales con ✗ / interrumpidas y el
+  LLM aprende a recuperarse. La fila del turno perturbado no se guarda.
+- Guardar también episodios fallidos (la etiqueta sigue siendo correcta), salvo
+  los últimos turnos antes de morir.
+- Balance: deduplicar prompts idénticos; `recolectar(madera)` es ~40% de las etiquetas.
+- Parafraseos de la misión (3-4 por misión) para no memorizar el enunciado.
+- Separar algunas semillas como validación offline: % habilidad == oráculo y % inválidas.
+- Tamaño: ~9 turnos/episodio → 200 episodios/misión ≈ 9k ejemplos.
+- Generar con habilidades scripteadas ahora; regenerar con `--skills ppo` cuando
+  esté el agente (falla distinto).
 
-**B — qué falta:**
-- [ ] Razonamientos más ricos que las plantillas actuales del oráculo.
-- [ ] Diversidad: parafraseos de la misión, distintos órdenes válidos del plan.
-- [ ] Decidir si generar con `--skills ppo` cuando esté el agente (el historial
-      va a tener los fallos reales del agente, y el LLM aprende a reintentar).
-- [ ] Estadísticas del dataset: # ejemplos por misión y por habilidad.
+Si cambia `state_to_text`, `SYSTEM_PROMPT` o el oráculo, hay que regenerar el dataset.
 
 ## 2. SFT (`train_sft.py`, esqueleto)
 
