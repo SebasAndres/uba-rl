@@ -1,0 +1,8 @@
+# Fase 2: LLM planificador (zero-shot, SFT, PPO).
+-r requirements.txt
+transformers
+peft
+trl
+datasets
+accelerate
+bitsandbytes          # opcional: --load-in-4bit (QLoRA), sólo con GPU NVIDIA
