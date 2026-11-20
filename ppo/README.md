@@ -103,7 +103,8 @@ ppo/
 │   ├── planner/                 # traductor, parser, oráculo, LLM                              → README
 │   ├── missions/                # misiones, chequeos de éxito, split train/test                 → README
 │   ├── planner_env.py           # loop jerárquico = entorno de la fase 2
-│   └── factory.py               # arma planner/agente desde flags y checkpoints
+│   ├── factory.py               # arma planner/agente desde flags y checkpoints
+│   └── render.py                # video (.mp4/.gif) y ventana en vivo (pygame) de un episodio
 ├── scripts/
 │   ├── crear_dummies.py         # checkpoints sin entrenar para correr el pipeline antes de entrenar
 │   ├── play.py                  # ▶ jugar una misión con el pipeline completo

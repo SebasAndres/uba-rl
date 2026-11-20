@@ -18,12 +18,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from crafter_hrl import PlannerEnv  # noqa: E402
+from crafter_hrl import PlannerEnv, TurnInfo  # noqa: E402
 from crafter_hrl.factory import build_planner, build_skill_policy  # noqa: E402
-from crafter_hrl.missions import MISSIONS  # noqa: E402
+from crafter_hrl.missions import MISSIONS, Mission  # noqa: E402
+from crafter_hrl.planner import Planner  # noqa: E402
+from crafter_hrl.render import Renderer  # noqa: E402
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mission", default="espada_piedra", choices=list(MISSIONS))
     p.add_argument("--planner", default="llm", choices=["llm", "oracle"])
@@ -46,80 +48,66 @@ def parse_args():
     return p.parse_args()
 
 
-class Renderer:
-    def __init__(self, video: str | None, window: bool, fps: int, size: int = 512):
-        self.frames, self.video, self.size, self.fps = [], video, size, fps
-        self.screen = None
-        if window:
-            import pygame
-            pygame.init()
-            self.pygame = pygame
-            self.screen = pygame.display.set_mode((size, size))
-            self.clock = pygame.time.Clock()
-
-    def __call__(self, env, action, info):
-        if not (self.video or self.screen):
-            return
-        frame = env.render(self.size)
-        if self.video:
-            self.frames.append(frame)
-        if self.screen is not None:
-            surf = self.pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
-            self.screen.blit(surf, (0, 0))
-            self.pygame.display.flip()
-            self.pygame.event.pump()
-            self.clock.tick(self.fps)
-
-    def close(self):
-        if self.video and self.frames:
-            import imageio
-            Path(self.video).parent.mkdir(parents=True, exist_ok=True)
-            try:
-                kwargs = {"fps": self.fps} if self.video.endswith(".mp4") else {"duration": 1000 / self.fps}
-                imageio.mimsave(self.video, self.frames, **kwargs)
-            except ValueError:  # sin backend para mp4 (falta imageio[ffmpeg])
-                self.video = str(Path(self.video).with_suffix(".gif"))
-                print("Sin soporte mp4 (pip install 'imageio[ffmpeg]'): guardo GIF.")
-                imageio.mimsave(self.video, self.frames, duration=1000 / self.fps)
-            print(f"\nVideo guardado en {self.video} ({len(self.frames)} frames)")
-        if self.screen is not None:
-            self.pygame.quit()
+def turn_status(turn: TurnInfo) -> str:
+    res = turn.skill_result
+    if not turn.valid:
+        return "INVÁLIDA"
+    if res.success:
+        return "✓"
+    return "✗ daño" if res.stopped_early else "✗ timeout"
 
 
-def main():
-    args = parse_args()
-    skills = build_skill_policy(args.skills, args.skill_ckpt, seed=args.seed)
-    print("Cargando modelos...", flush=True)
-    planner = build_planner(args.planner, args.base_model, args.adapter, args.load_in_4bit, args.temperature)
-    renderer = Renderer(args.video, args.window, args.fps)
-    env = PlannerEnv(skills, seed=args.seed, max_env_steps=args.max_env_steps,
-                     max_decisions=args.max_decisions, on_env_step=renderer, list_skills=args.list_skills)
+def print_turn(env: PlannerEnv, turn: TurnInfo, reward: float, llm_text: str, obs_text: str, quiet: bool) -> None:
+    res = turn.skill_result
+    steps = f"{res.steps:3d} pasos" if res else "  0 pasos"
+    print(f"\n── Turno {env.decisions:3d} │ {turn.skill or '(no parseable)':28s} │ {turn_status(turn):9s} │ "
+          f"{steps} │ r={reward:+.2f} │ t={turn.env_steps}")
+    if not quiet:
+        print("   LLM: " + llm_text.replace("\n", "\n        "))
+        print("   " + obs_text.split("\nHabilidades:")[0].replace("\n", "\n   "))
 
-    mission = MISSIONS[args.mission]
+
+def run_episode(env: PlannerEnv, planner: Planner, mission: Mission, quiet: bool) -> tuple[TurnInfo, float]:
+    """Juega la misión hasta terminar; devuelve el último turno y el retorno total."""
     text, info = env.reset(mission)
     planner.reset(mission)
-    print(f"Misión: {mission.text}   [planner={planner.name}, habilidades={skills.name}, seed={args.seed}]")
-
+    
+    if not quiet:
+        print("\nEntrada del LLM (turno 1):\n   " + text.replace("\n", "\n   "))
+    
     total, done = 0.0, False
     while not done:
-        if env.decisions == 0 and not args.quiet:
-            print("\nEntrada del LLM (turno 1):\n   " + text.replace("\n", "\n   "))
         out = planner.plan(text, info)
         text, reward, terminated, truncated, turn = env.step(out.text)
         info, total, done = turn.crafter_info, total + reward, terminated or truncated
-        res = turn.skill_result
-        status = ("INVÁLIDA" if not turn.valid else "✓" if res.success
-                  else "✗ daño" if res.stopped_early else "✗ timeout")
-        steps = f"{res.steps:3d} pasos" if res else "  0 pasos"
-        print(f"\n── Turno {env.decisions:3d} │ {turn.skill or '(no parseable)':28s} │ {status:9s} │ "
-              f"{steps} │ r={reward:+.2f} │ t={turn.env_steps}")
-        if not args.quiet:
-            print("   LLM: " + out.text.replace("\n", "\n        "))
-            print("   " + text.split("\nHabilidades:")[0].replace("\n", "\n   "))
+        print_turn(env, turn, reward, out.text, text, quiet)
+        
+    return turn, total
+
+
+def main() -> None:
+    args = parse_args()
+
+    skills = build_skill_policy(args.skills, args.skill_ckpt, seed=args.seed)
+    
+    print("Cargando modelos...", flush=True)
+    planner = build_planner(args.planner, args.base_model, args.adapter, args.load_in_4bit, args.temperature)
+    
+    mission = MISSIONS[args.mission]
+    with Renderer.from_options(args.video, args.window, args.fps) as renderer:
+        env = PlannerEnv(
+                skills, 
+                seed=args.seed,
+                max_env_steps=args.max_env_steps,
+                max_decisions=args.max_decisions, 
+                on_env_step=renderer, 
+                list_skills=args.list_skills
+            )
+        print(f"Misión: {mission.text}   [planner={planner.name}, habilidades={skills.name}, seed={args.seed}]")
+        turn, total = run_episode(env, planner, mission, args.quiet)
 
     outcome = "MISIÓN CUMPLIDA" if turn.mission_success else ("MURIÓ" if turn.died else "SIN TIEMPO")
     print(f"\n{outcome} en {env.decisions} decisiones / {turn.env_steps} pasos. Retorno = {total:+.2f}")
-    renderer.close()
 
 
 if __name__ == "__main__":
