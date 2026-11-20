@@ -9,7 +9,20 @@ Una sola política condicionada al objetivo:
 - **Output**: 1 de las 17 acciones por paso.
 - **Entorno**: `SkillEnv` (`crafter_hrl/skills/skill_env.py`), ya implementado:
   un episodio = un intento de una habilidad; +1 al cumplirla, −0.01 por paso,
-  timeout 100 (300 para dormir).
+  timeout 100 (300 para dormir), más el **shaping** por distancia BFS.
+- **Shaping** (`crafter_hrl/skills/shaping.py`): `coef·(γ·Φ(s') − Φ(s))` con
+  `Φ = 1 − d_BFS/(R+1)` hacia el objetivo (árbol, agua, vaca, mesa/horno...).
+  Basado en potencial: no cambia la política óptima. Φ(terminal) = 0, así que el
+  shaping total de un episodio es ≈ −Φ(s₀) (es normal que sea negativo); la señal
+  útil está en cada paso. Sin shaping: dormir, colocar, recolectar(brote).
+  `--shaping-coef 0` lo desactiva (sirve como ablación).
+- **Curriculum** (`crafter_hrl/skills/curriculum.py`): 5 etapas (madera →
+  beber/comer → mesa/herramientas de madera → piedra/carbón/horno → hierro/diamante/resto);
+  avanza cuando el éxito medio de lo desbloqueado ≥ `--advance-threshold`.
+  Dentro de la etapa se sortea con peso `1 − éxito`. Con prob. `--prereq-prob`
+  se regalan los prerequisitos de la habilidad (ítems, energía baja para dormir,
+  mesa/horno a ≤4 celdas, juntos a ≤2 entre sí). Con el agente scripteado recorre
+  las 5 etapas en ~400 intentos.
 - **Red**: `SkillAgent` (`crafter_hrl/skills/policy.py`), ya implementada.
 
 ## Qué hay que hacer
@@ -20,11 +33,9 @@ Una sola política condicionada al objetivo:
 2. [ ] **Primer hito (IDEA.md, paso 4)**: entrenar sólo `recolectar(madera)`
    (`SkillEnv(skills=[Skill("recolectar", "madera")])`) y reemplazar la
    scripteada en `play.py`. Validar que la curva de éxito sube antes de seguir.
-3. [ ] Agregar habilidades de a poco (curriculum): madera → beber/comer → colocar
-   → fabricar → piedra/carbón → hierro/diamante. Loguear **éxito por habilidad**
-   (ya está el diccionario `success_by_skill`).
-4. [ ] Ajustar `boost_prob` / `DEFAULT_BOOST` para que las habilidades avanzadas
-   aparezcan lo suficiente.
+3. [x] Curriculum por etapas y shaping (ver arriba). Falta loguear **éxito por
+   habilidad** (`success_by_skill`), `infos["stage"]` e `infos["shaping"]`.
+4. [ ] Ajustar `shaping_coef`, `advance_threshold` y `prereq_prob` mirando las curvas.
 5. [ ] Evaluar cada habilidad por separado (tasa de éxito y pasos promedio) contra
    la scripteada: eso es la ablación "scripteadas vs RL".
 6. [ ] Congelar: guardar el checkpoint final y no tocar más el catálogo.

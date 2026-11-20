@@ -58,8 +58,13 @@ class Args:
     # entorno
     num_envs: int = 16
     async_envs: bool = True         # AsyncVectorEnv (subprocesos): Crafter es CPU-bound
-    boost_prob: float = 0.3         # prob. de regalar inventario en el reset (curriculum)
+    boost_prob: float = 0.3         # prob. de regalar inventario aleatorio en el reset
     step_penalty: float = 0.01
+    shaping_coef: float = 0.1       # shaping por distancia BFS al objetivo (0 = sin shaping)
+    use_curriculum: bool = True     # etapas + muestreo ponderado por (1 - éxito)
+    start_stage: int = 0
+    advance_threshold: float = 0.6  # éxito medio de lo desbloqueado para pasar de etapa
+    prereq_prob: float = 0.5        # prob. de regalar los prerequisitos de la habilidad sorteada
 
     # PPO (punto de partida: los de ppo_atari.py; ajustar)
     total_timesteps: int = 5_000_000
@@ -138,7 +143,7 @@ def make_env(seed: int, args: Args) -> Callable[[], SkillEnv]:
     seed : int
         Semilla del entorno.
     args : Args
-        Hiperparámetros (curriculum, penalización por paso).
+        Hiperparámetros (curriculum, shaping, penalización por paso).
 
     Returns
     -------
@@ -147,7 +152,10 @@ def make_env(seed: int, args: Args) -> Callable[[], SkillEnv]:
     """
     def thunk() -> SkillEnv:
         """Construye el entorno (se llama dentro de cada subproceso)."""
-        return SkillEnv(seed=seed, boost_prob=args.boost_prob, step_penalty=args.step_penalty)
+        return SkillEnv(seed=seed, boost_prob=args.boost_prob, step_penalty=args.step_penalty,
+                        shaping_coef=args.shaping_coef, gamma=args.gamma,
+                        use_curriculum=args.use_curriculum, start_stage=args.start_stage,
+                        advance_threshold=args.advance_threshold, prereq_prob=args.prereq_prob)
     return thunk
 
 
@@ -262,6 +270,8 @@ def train(args: Args) -> None:
         #   - loguear éxito por habilidad: infos["skill"], infos["success"] cuando termina
         #     (con gymnasium 0.29 vienen en infos["final_info"]):
         #         success_by_skill[skill].append(success)
+        #   - loguear también infos["stage"] (etapa del curriculum, media entre entornos)
+        #     e infos["shaping"] (para ver que no domine al +1 de éxito).
         #   Timeout: como la red ve la fracción de tiempo restante ("time"), el
         #   timeout es parte de la tarea (también corta la habilidad en el juego)
         #   y tratarlo como done, como hace CleanRL, es correcto: no hace falta

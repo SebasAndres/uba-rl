@@ -114,6 +114,34 @@ class CrafterEnv:
         for item, amount in items.items():
             self.player.inventory[item] = int(amount)
 
+    def set_material(self, pos: tuple[int, int], name: str) -> None:
+        """Cambia el material de una celda (curriculum: poner una mesa/horno cerca).
+
+        Parameters
+        ----------
+        pos : tuple of int
+            Celda (x, y).
+        name : str
+            Material interno de Crafter (ej. "table").
+        """
+        self.env._world[(int(pos[0]), int(pos[1]))] = name
+
+    def refresh(self) -> tuple[np.ndarray, dict]:
+        """Recalcula obs, inventario y mapa semántico tras editar el estado sin dar un paso.
+
+        Returns
+        -------
+        obs : np.ndarray
+            Imagen RGB actual.
+        info : dict
+            `last_info` con "inventory" y "semantic" actualizados.
+        """
+        info = dict(self.last_info or {})
+        info["inventory"] = self.player.inventory.copy()
+        info["semantic"] = self.env._sem_view()
+        self.last_info = info
+        return self.env._obs(), info
+
     def render(self, size: int = 256) -> np.ndarray:
         """Frame RGB grande para video/ventana (la obs del agente es 64x64).
 
