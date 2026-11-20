@@ -1,12 +1,21 @@
 """FASE 1 — Entrenar el agente de habilidades con PPO (sin LLM).
 
 ESQUELETO: el setup (entornos, red, buffers, logging, checkpoint) está hecho;
-el loop de PPO está marcado con TODO. Referencia línea por línea:
-    ../../../cleanrl/cleanrl/ppo_atari.py   (loop: L202-L320)
-Diferencias con ppo_atari.py:
-    - la observación es un Dict {"image", "goal", "time"}: hay tres buffers en vez de uno,
-    - la red es crafter_hrl.skills.policy.SkillAgent (CNN + goal_vec + fracción de tiempo),
+el loop de PPO está marcado con TODO. Referencia (la red es recurrente):
+    ../../../cleanrl/cleanrl/ppo_atari_lstm.py
+Diferencias con ppo_atari_lstm.py:
+    - la observación es un Dict {"image", "goal", "time"} y además la red recibe
+      la acción anterior: hay un buffer por cada entrada en vez de uno,
+    - la red es crafter_hrl.skills.policy.SkillAgent (CNN + [goal_vec | tiempo |
+      acción anterior] -> LSTM); `encode` + `get_states` reemplazan a `get_states`
+      de CleanRL, y `get_action_and_value` también devuelve el estado nuevo,
     - el checkpoint se guarda con save_skill_policy (lo lee scripts/play.py).
+
+Estado de la LSTM (ver docstring de crafter_hrl/skills/policy.py):
+    - `next_lstm_state` lleva (h, c) de cada entorno entre pasos del rollout,
+    - `initial_lstm_state` es la copia al empezar el rollout: el update vuelve a
+      pasar la secuencia entera desde ahí, con los mismos reinicios (dones),
+    - por eso los minibatches se arman con ENTORNOS completos, no pasos sueltos.
 
 Uso:
     python training/fase1_habilidades/train_skills.py --total-timesteps 2000000
@@ -31,7 +40,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from crafter_hrl.skills.catalog import GOAL_DIM  # noqa: E402
-from crafter_hrl.skills.policy import SkillAgent, save_skill_policy  # noqa: E402
+from crafter_hrl.env.constants import NUM_ACTIONS  # noqa: E402
+from crafter_hrl.skills.policy import SkillAgent, prev_action_vec, save_skill_policy  # noqa: E402,F401
 from crafter_hrl.skills.skill_env import SkillEnv  # noqa: E402
 
 
@@ -58,7 +68,7 @@ class Args:
     anneal_lr: bool = True
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    num_minibatches: int = 8
+    num_minibatches: int = 4  # con LSTM: minibatch = num_envs / num_minibatches entornos completos
     update_epochs: int = 4
     norm_adv: bool = True
     clip_coef: float = 0.1
@@ -81,6 +91,7 @@ class RolloutBuffers:
     images: torch.Tensor
     goals: torch.Tensor
     times: torch.Tensor
+    prev_actions: torch.Tensor
     actions: torch.Tensor
     logprobs: torch.Tensor
     rewards: torch.Tensor
@@ -110,6 +121,7 @@ class RolloutBuffers:
             images=torch.zeros((*shape, 64, 64, 3), dtype=torch.uint8, device=device),
             goals=torch.zeros((*shape, GOAL_DIM), device=device),
             times=torch.zeros((*shape, 1), device=device),
+            prev_actions=torch.zeros((*shape, NUM_ACTIONS), device=device),
             actions=torch.zeros(shape, device=device),
             logprobs=torch.zeros(shape, device=device),
             rewards=torch.zeros(shape, device=device),
@@ -151,7 +163,14 @@ def finalize_args(args: Args) -> Args:
     -------
     Args
         Los mismos args, con los campos derivados completos.
+
+    Raises
+    ------
+    ValueError
+        Si los entornos no se pueden repartir en minibatches de entornos completos.
     """
+    if args.num_envs % args.num_minibatches != 0:
+        raise ValueError("num_envs tiene que ser múltiplo de num_minibatches (minibatches por entorno).")
     args.batch_size = args.num_envs * args.num_steps
     args.minibatch_size = args.batch_size // args.num_minibatches
     args.num_iterations = args.total_timesteps // args.batch_size
@@ -224,14 +243,22 @@ def train(args: Args) -> None:
     next_goal = torch.as_tensor(next_obs["goal"], device=device)  # noqa: F841
     next_time = torch.as_tensor(next_obs["time"], device=device)  # noqa: F841
     next_done = torch.zeros(args.num_envs, device=device)  # noqa: F841
+    # Lo que la red NO guarda y lleva el loop: acción anterior (ceros = "recién empiezo") y estado LSTM.
+    next_prev_action = torch.zeros(args.num_envs, NUM_ACTIONS, device=device)  # noqa: F841
+    next_lstm_state = agent.initial_state(args.num_envs, device)  # noqa: F841
 
     for iteration in range(1, args.num_iterations + 1):
-        # TODO(A) 1. Annealing del learning rate (ppo_atari.py L204-L207).
+        # TODO(A) 0. initial_lstm_state = (next_lstm_state[0].clone(), next_lstm_state[1].clone())
 
-        # TODO(A) 2. Rollout de num_steps pasos (ppo_atari.py L209-L232):
-        #   - guardar buffers.images[step], buffers.goals[step], buffers.times[step], buffers.dones[step]
-        #   - agent.get_action_and_value(next_image, next_goal, next_time) sin gradiente
+        # TODO(A) 1. Annealing del learning rate (como ppo_atari_lstm.py).
+
+        # TODO(A) 2. Rollout de num_steps pasos (como ppo_atari_lstm.py):
+        #   - guardar buffers.images/goals/times/prev_actions/dones[step] (next_*)
+        #   - sin gradiente:
+        #       action, logprob, _, value, next_lstm_state = agent.get_action_and_value(
+        #           next_image, next_goal, next_time, next_prev_action, next_lstm_state, next_done)
         #   - envs.step(...) ; next_done = terminated | truncated
+        #   - next_prev_action = prev_action_vec(action, next_done)   # ceros si empieza otra habilidad
         #   - loguear éxito por habilidad: infos["skill"], infos["success"] cuando termina
         #     (con gymnasium 0.29 vienen en infos["final_info"]):
         #         success_by_skill[skill].append(success)
@@ -241,13 +268,17 @@ def train(args: Args) -> None:
         #   bootstrapear. La única truncation "externa" es el fin del mundo de
         #   Crafter (world_length=10000 pasos), que es rara.
 
-        # TODO(A) 3. GAE (ppo_atari.py L234-L246) -> advantages, returns.
-        #   agent.get_value(next_image, next_goal, next_time) para el último estado.
+        # TODO(A) 3. GAE -> advantages, returns. Valor del último estado:
+        #   agent.get_value(next_image, next_goal, next_time, next_prev_action, next_lstm_state, next_done)
 
-        # TODO(A) 4. Aplanar el batch y hacer update_epochs de PPO con minibatches
-        #   (ppo_atari.py L248-L320): ratio, clip, value loss (clipeada), entropía,
-        #   clip_grad_norm, early stop por target_kl. Loguear losses, approx_kl,
-        #   clipfrac, explained_variance.
+        # TODO(A) 4. Update PPO por minibatches de ENTORNOS completos (como ppo_atari_lstm.py):
+        #   envs_per_batch = num_envs // num_minibatches ; mezclar los índices de entorno,
+        #   tomar TODOS los pasos de esos entornos (orden paso a paso, ver get_states) y re-evaluar:
+        #       agent.get_action_and_value(b_images[mb], b_goals[mb], b_times[mb], b_prev_actions[mb],
+        #           (initial_lstm_state[0][:, mb_envs], initial_lstm_state[1][:, mb_envs]),
+        #           b_dones[mb], b_actions.long()[mb])
+        #   Después: ratio, clip, value loss (clipeada), entropía, clip_grad_norm,
+        #   early stop por target_kl. Loguear losses, approx_kl, clipfrac, explained_variance.
         raise NotImplementedError("Completar el loop de PPO (ver TODOs).")
 
         log_iteration(writer, success_by_skill, global_step, start_time)
