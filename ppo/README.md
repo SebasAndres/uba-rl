@@ -10,6 +10,29 @@ misión ─► LLM ─► "recolectar(madera)" ─► parser ─► goal_vec ─
            └──────────────────── estado → texto (traductor) ◄──────────── obs + info ◄────┘
 ```
 
+### Flujo de entradas y salidas
+
+```mermaid
+flowchart LR
+    M["📜 <b>Misión</b> (texto natural)<br/><i>Fabricá una espada de piedra.</i><br/>+ estado en texto:<br/>vitales, inventario, cerca, historial"]
+    LLM[["🧠 <b>LLM planificador</b><br/>Qwen2.5 + LoRA"]]
+    R["💬 <b>Razón + habilidad</b><br/><i>Razonamiento: Misión: espada de piedra (0/1)<br/>→ mesa usa madera 2, tengo 1 → recolecto madera.</i><br/><i>Habilidad: recolectar(madera)</i>"]
+    SA[["🤖 <b>SkilledAgent</b><br/>PPO congelado<br/>CNN + goal_vec → LSTM"]]
+    A["🎮 <b>Secuencia de acciones</b><br/>1 de 17 por paso, hasta cumplir o timeout<br/><i>move_up, move_up, move_left, do, do …</i>"]
+    E[["🌍 <b>Entorno</b><br/>Crafter"]]
+    RW["🏆 <b>Reward</b><br/>agente: +1 habilidad cumplida, −0.01/paso<br/>LLM: +1 misión, −0.5 muerte/inválida, −0.02/decisión"]
+
+    M --> LLM --> R -->|"parser → goal_vec (22)"| SA --> A --> E --> RW
+    E -. "obs 64×64 + info → traductor → texto (próximo turno)" .-> M
+    E -. "imagen 64×64 en cada paso" .-> SA
+```
+
+| Etapa | Entrada | Salida | Frecuencia |
+|---|---|---|---|
+| LLM | misión + estado en texto (`state_to_text`) | `Razonamiento: ...` + `Habilidad: verbo(args)` | una vez por turno |
+| SkilledAgent | imagen 64×64 + `goal_vec` + tiempo restante + acción anterior | una acción primitiva | en cada paso, hasta cumplir la habilidad o timeout (100; 300 para dormir) |
+| Entorno | acción primitiva | obs + `info` (inventario, logros, mapa) → reward | en cada paso |
+
 ## Estado actual
 
 **Todavía no hay nada entrenado.** Lo que ya está y funciona:
@@ -26,7 +49,7 @@ misión ─► LLM ─► "recolectar(madera)" ─► parser ─► goal_vec ─
 | **Oráculo** scripteado (árbol tecnológico) | ✅ |
 | Loop jerárquico = entorno de la fase 2 (`PlannerEnv`) | ✅ |
 | Juego (`scripts/play.py`) y evaluación (`evaluation/evaluate.py`) | ✅ |
-| Generador del dataset de SFT | ✅ |
+| Generador del dataset de SFT | ❌ por implementar (idea en `training/fase2_sft/README.md`) |
 | Entrenamiento fase 1 (PPO habilidades) | 🟡 esqueleto con TODOs |
 | SFT del LLM | 🟡 esqueleto |
 | PPO del LLM | 🟡 esqueleto |
@@ -141,7 +164,7 @@ ppo/
 | Rol | Carpeta | Primer entregable |
 |---|---|---|
 | A: habilidades PPO | `training/fase1_habilidades`, `crafter_hrl/skills` | `recolectar(madera)` entrenada reemplazando a la scripteada |
-| B: traductor, oráculo, dataset | `crafter_hrl/planner`, `training/fase2_sft/generar_dataset.py` | dataset de SFT de las misiones de train |
+| B: traductor, oráculo, dataset | `crafter_hrl/planner`, dataset de `training/fase2_sft` (ver su README) | dataset de SFT de las misiones de train |
 | C: SFT y PPO del LLM | `training/fase2_sft`, `training/fase2_ppo_llm` | SFT que supere al zero-shot |
 | D: integración, evaluación, demo | `evaluation`, `scripts`, `training/baseline_ppo_plano` | tabla de comparación y video |
 
