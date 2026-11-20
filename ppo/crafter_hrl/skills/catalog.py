@@ -106,12 +106,32 @@ class Skill:
         return SLEEP_TIMEOUT if self.verb == "dormir" else DEFAULT_TIMEOUT
 
 
-SKILLS: list[Skill] = (
-    [Skill("recolectar", o) for o in _RESOURCE]
-    + [Skill("beber"), Skill("comer", "vaca"), Skill("dormir"), Skill("pelear", "zombi")]
-    + [Skill("colocar", o) for o in _PLACEABLE]
-    + [Skill("fabricar", t, m) for t in _TOOL for m in _TOOL_MAT]
-)
+# SALIDA DEL LLM PLANIFICADOR: una de estas 19 habilidades por turno, escrita con
+# la sintaxis de `str(skill)` en la línea "Habilidad:" (ver planner/translator.py
+# para el formato y planner/parser.py para cómo se lee). Es también la ENTRADA
+# del agente de habilidades, codificada con `encode` como goal_vec.
+SKILLS: list[Skill] = [
+    Skill("recolectar", "madera"),        # 0
+    Skill("recolectar", "piedra"),        # 1  requiere pico de madera
+    Skill("recolectar", "carbon"),        # 2  requiere pico de madera
+    Skill("recolectar", "hierro"),        # 3  requiere pico de piedra
+    Skill("recolectar", "diamante"),      # 4  requiere pico de hierro
+    Skill("recolectar", "brote"),         # 5  del pasto, 10% por golpe
+    Skill("beber"),                       # 6
+    Skill("comer", "vaca"),               # 7
+    Skill("dormir"),                      # 8
+    Skill("pelear", "zombi"),             # 9
+    Skill("colocar", "mesa"),             # 10
+    Skill("colocar", "horno"),            # 11
+    Skill("colocar", "piedra"),           # 12
+    Skill("fabricar", "pico", "madera"),  # 13 cerca de una mesa
+    Skill("fabricar", "pico", "piedra"),  # 14 cerca de una mesa
+    Skill("fabricar", "pico", "hierro"),  # 15 cerca de mesa y horno
+    Skill("fabricar", "espada", "madera"),  # 16 cerca de una mesa
+    Skill("fabricar", "espada", "piedra"),  # 17 cerca de una mesa
+    Skill("fabricar", "espada", "hierro"),  # 18 cerca de mesa y horno
+]
+assert len(set(SKILLS)) == len(SKILLS), "Habilidad repetida en SKILLS"
 SKILL_NAMES = [str(s) for s in SKILLS]
 
 

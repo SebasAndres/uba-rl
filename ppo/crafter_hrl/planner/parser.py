@@ -9,8 +9,8 @@ import re
 import unicodedata
 
 from ..skills.catalog import SKILLS, Skill
+from .translator import SKILL_PREFIX
 
-_SKILL_PREFIX = "habilidad:"
 _BY_NAME = {str(s).replace(" ", ""): s for s in SKILLS}  # "fabricar(pico,madera)" -> Skill
 _CALL = re.compile(r"([a-z]+)\s*\(([^)]*)\)")             # verbo(arg1, arg2)
 
@@ -65,8 +65,9 @@ def parse_skill(text: str) -> Skill | None:
         La última habilidad válida encontrada, o None si no hay ninguna.
     """
     norm = _normalize(text)
-    if _SKILL_PREFIX in norm:
-        norm = norm.rsplit(_SKILL_PREFIX, 1)[1]
+    prefix = _normalize(SKILL_PREFIX)
+    if prefix in norm:
+        norm = norm.rsplit(prefix, 1)[1]
     found = None
     for verb, args in _CALL.findall(norm):
         found = _BY_NAME.get(_canonical_call(verb, args), found)

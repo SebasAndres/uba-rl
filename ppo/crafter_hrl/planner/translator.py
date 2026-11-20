@@ -21,6 +21,12 @@ from ..env.constants import ES, VITALS
 from ..env.perception import closest_per_type, visible
 from ..skills.catalog import MAX_VITAL, SKILLS, is_feasible
 
+# SALIDA DEL LLM: dos líneas con estos prefijos. La habilidad tiene que ser una
+# de `skills.catalog.SKILLS`, escrita como `str(skill)`. Los usan el prompt de
+# abajo, `format_response` (respuestas del oráculo para el SFT) y `parser.parse_skill`.
+REASONING_PREFIX = "Razonamiento:"
+SKILL_PREFIX = "Habilidad:"
+
 SYSTEM_PROMPT = (
     "Sos el planificador de un agente en Crafter (un Minecraft 2D). En cada turno "
     "elegís UNA habilidad para que el agente la ejecute.\n"
@@ -31,8 +37,8 @@ SYSTEM_PROMPT = (
     "una habilidad de la lista o faltaban materiales.\n"
     "- Habilidades: la lista de habilidades que podés pedir, con su sintaxis.\n"
     "Respondé exactamente con dos líneas:\n"
-    "Razonamiento: <una oración>\n"
-    "Habilidad: <una habilidad de la lista, con la sintaxis exacta>"
+    f"{REASONING_PREFIX} <una oración>\n"
+    f"{SKILL_PREFIX} <una habilidad de la lista, con la sintaxis exacta>"
 )
 
 
@@ -131,4 +137,4 @@ def format_response(reasoning: str, skill: str) -> str:
     str
         "Razonamiento: ...\\nHabilidad: ...".
     """
-    return f"Razonamiento: {reasoning}\nHabilidad: {skill}"
+    return f"{REASONING_PREFIX} {reasoning}\n{SKILL_PREFIX} {skill}"

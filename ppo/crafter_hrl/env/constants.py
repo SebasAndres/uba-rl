@@ -7,7 +7,29 @@ la versión de Crafter, cambian solos los costos/requisitos.
 import crafter.constants as cc
 
 # --- Acciones primitivas (17) -------------------------------------------------
-ACTIONS: list[str] = list(cc.actions)
+# SALIDA DEL AGENTE DE HABILIDADES (SkillAgent / PPOSkillPolicy.act): un índice
+# de esta lista por paso. El orden es el de Crafter (data.yaml) y se verifica
+# abajo: si una versión nueva de Crafter lo cambia, falla al importar.
+ACTIONS: list[str] = [
+    "noop",                # 0  no hacer nada
+    "move_left",           # 1  moverse (o girar si está bloqueado)
+    "move_right",          # 2
+    "move_up",             # 3
+    "move_down",           # 4
+    "do",                  # 5  interactuar con la casilla de enfrente: recolectar, golpear, comer, beber
+    "sleep",               # 6
+    "place_stone",         # 7
+    "place_table",         # 8
+    "place_furnace",       # 9
+    "place_plant",         # 10
+    "make_wood_pickaxe",   # 11
+    "make_stone_pickaxe",  # 12
+    "make_iron_pickaxe",   # 13
+    "make_wood_sword",     # 14
+    "make_stone_sword",    # 15
+    "make_iron_sword",     # 16
+]
+assert ACTIONS == list(cc.actions), f"Cambió el orden de acciones de Crafter: {list(cc.actions)}"
 ACTION_ID: dict[str, int] = {name: i for i, name in enumerate(ACTIONS)}
 NUM_ACTIONS = len(ACTIONS)
 

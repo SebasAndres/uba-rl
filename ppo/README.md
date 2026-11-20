@@ -118,6 +118,13 @@ ppo/
 └── checkpoints/                 # dónde dejar los modelos para que play.py los encuentre       → README
 ```
 
+## Qué devuelve cada agente (dónde está definido)
+
+| Agente | Salida | Definida en |
+|---|---|---|
+| LLM planificador | Texto `Razonamiento: ...\nHabilidad: verbo(args)`; la habilidad es **una de 19** | Lista: `crafter_hrl/skills/catalog.py` (`SKILLS`). Prefijos: `crafter_hrl/planner/translator.py` (`REASONING_PREFIX`, `SKILL_PREFIX`). Lectura: `crafter_hrl/planner/parser.py` (`parse_skill`) |
+| Agente de habilidades (PPO) | Un índice de **una de 17** acciones primitivas por paso | `crafter_hrl/env/constants.py` (`ACTIONS`); se elige en `PPOSkillPolicy.act` (`crafter_hrl/skills/policy.py`) |
+
 ## Contratos entre módulos (no romper sin avisar)
 
 1. **Catálogo de habilidades** (`skills/catalog.py`): la lista de habilidades y
