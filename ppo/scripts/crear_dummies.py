@@ -22,28 +22,71 @@ from crafter_hrl.factory import LLM_DUMMY, SKILL_CKPT  # noqa: E402
 from crafter_hrl.planner.llm import DEFAULT_BASE_MODEL, create_lora_adapter  # noqa: E402
 
 
-def main(args):
+def create_skill_dummy(seed: int, force: bool) -> None:
+    """Guarda un agente de habilidades con pesos aleatorios (si no existe uno).
+
+    Parameters
+    ----------
+    seed : int
+        Semilla de la inicialización.
+    force : bool
+        Pisar el checkpoint aunque ya exista (¡puede ser uno entrenado!).
+    """
     import torch
     from crafter_hrl.skills.policy import SkillAgent, save_skill_policy
 
-    if SKILL_CKPT.exists() and not args.force:
+    if SKILL_CKPT.exists() and not force:
         print(f"[agente] ya existe {SKILL_CKPT} (usar --force para pisarlo; ¿es uno entrenado?)")
-    else:
-        torch.manual_seed(args.seed)
-        save_skill_policy(SkillAgent(), SKILL_CKPT, dummy=True, seed=args.seed)
-        print(f"[agente] dummy guardado en {SKILL_CKPT}")
+        return
+    torch.manual_seed(seed)
+    save_skill_policy(SkillAgent(), SKILL_CKPT, dummy=True, seed=seed)
+    print(f"[agente] dummy guardado en {SKILL_CKPT}")
 
-    if LLM_DUMMY.exists() and not args.force:
+
+def create_llm_dummy(base_model: str, force: bool) -> None:
+    """Guarda un adapter LoRA sin entrenar (si no existe uno).
+
+    Parameters
+    ----------
+    base_model : str
+        Modelo base de Hugging Face (se descarga la primera vez).
+    force : bool
+        Pisar el adapter aunque ya exista.
+    """
+    if LLM_DUMMY.exists() and not force:
         print(f"[llm]    ya existe {LLM_DUMMY}")
-    else:
-        print(f"[llm]    descargando {args.base_model} (la primera vez, ~1 GB) y creando LoRA...")
-        create_lora_adapter(LLM_DUMMY, args.base_model)
-        print(f"[llm]    adapter dummy guardado en {LLM_DUMMY}")
+        return
+    print(f"[llm]    descargando {base_model} (la primera vez, ~1 GB) y creando LoRA...")
+    create_lora_adapter(LLM_DUMMY, base_model)
+    print(f"[llm]    adapter dummy guardado en {LLM_DUMMY}")
+
+
+def parse_args() -> argparse.Namespace:
+    """Lee los argumentos de la línea de comandos.
+
+    Returns
+    -------
+    argparse.Namespace
+        `base_model`, `seed` y `force`.
+    """
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--force", action="store_true", help="pisar los checkpoints existentes")
+    return p.parse_args()
+
+
+def main(args: argparse.Namespace) -> None:
+    """Crea los dummies del agente de habilidades y del LLM.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Argumentos de la línea de comandos.
+    """
+    create_skill_dummy(args.seed, args.force)
+    create_llm_dummy(args.base_model, args.force)
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--force", action="store_true")
-    main(p.parse_args())
+    main(parse_args())

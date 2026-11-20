@@ -8,53 +8,123 @@ devuelve info. Este wrapper:
     curriculum de la fase 1 (facing, sleeping, edición de inventario).
 """
 
-import numpy as np
+from typing import Any
+
 import crafter
+import numpy as np
+
+NOOP_ACTION = 0
 
 
 class CrafterEnv:
-    def __init__(self, seed: int | None = None, length: int = 10000, area=(64, 64), size=(64, 64)):
+    """Crafter con API estilo gymnasium y acceso al estado interno del jugador.
+
+    Parameters
+    ----------
+    seed : int or None, optional
+        Semilla del generador de mundos.
+    length : int, optional
+        Pasos máximos de un episodio de Crafter (después se trunca).
+    area : tuple of int, optional
+        Tamaño del mundo en celdas.
+    size : tuple of int, optional
+        Resolución de la observación RGB que ve el agente.
+    """
+
+    def __init__(self, seed: int | None = None, length: int = 10000,
+                 area: tuple[int, int] = (64, 64), size: tuple[int, int] = (64, 64)) -> None:
         self.env = crafter.Env(area=area, size=size, length=length, seed=seed, reward=True)
         self.length = length
         self.last_info: dict | None = None
 
-    # -- API estilo gymnasium ------------------------------------------------
-    def reset(self):
-        obs = self.env.reset()
-        # Un noop para obtener el info inicial (Crafter no lo da en reset).
-        obs, _, _, info = self.env.step(0)
+    # ------------------------------------------------------------ API gymnasium
+    def reset(self) -> tuple[np.ndarray, dict]:
+        """Genera un mundo nuevo.
+
+        Crafter no devuelve `info` en reset, así que se da un paso noop para obtenerlo.
+
+        Returns
+        -------
+        obs : np.ndarray
+            Imagen RGB (64, 64, 3) uint8.
+        info : dict
+            Estado inicial (inventario, logros, mapa semántico, posición, ...).
+        """
+        self.env.reset()
+        obs, _, _, info = self.env.step(NOOP_ACTION)
         self.last_info = info
         return obs, info
 
-    def step(self, action: int):
+    def step(self, action: int) -> tuple[np.ndarray, float, bool, bool, dict]:
+        """Ejecuta una acción primitiva.
+
+        Parameters
+        ----------
+        action : int
+            Índice de la acción (ver `constants.ACTIONS`).
+
+        Returns
+        -------
+        obs : np.ndarray
+            Imagen RGB después de la acción.
+        reward : float
+            Recompensa nativa de Crafter (+1 por logro nuevo, ±0.1 por vida).
+        terminated : bool
+            True si el jugador murió.
+        truncated : bool
+            True si se alcanzó `length` sin morir.
+        info : dict
+            Estado del juego después de la acción.
+        """
         obs, reward, done, info = self.env.step(int(action))
         self.last_info = info
-        terminated = info["discount"] == 0.0  # murió
+        terminated = info["discount"] == 0.0
         truncated = done and not terminated
         return obs, reward, terminated, truncated, info
 
-    # -- acceso al estado interno -----------------------------------------------
+    # ------------------------------------------------------- estado interno
     @property
-    def player(self):
+    def player(self) -> Any:
+        """crafter.objects.Player: objeto interno del jugador."""
         return self.env._player
 
     @property
     def facing(self) -> tuple[int, int]:
+        """tuple of int: dirección (dx, dy) hacia la que mira el jugador."""
         return tuple(int(v) for v in self.player.facing)
 
     @property
     def sleeping(self) -> bool:
+        """bool: si el jugador está dormido."""
         return bool(self.player.sleeping)
 
     @property
     def num_steps(self) -> int:
+        """int: pasos primitivos dados en el episodio actual."""
         return int(self.env._step or 0)
 
     def set_inventory(self, **items: int) -> None:
-        """Edita el inventario (curriculum de la fase 1: practicar habilidades avanzadas)."""
-        for k, v in items.items():
-            self.player.inventory[k] = int(v)
+        """Edita el inventario (curriculum de la fase 1: practicar habilidades avanzadas).
+
+        Parameters
+        ----------
+        **items : int
+            Cantidad por ítem, ej. ``set_inventory(wood=3, stone=1)``.
+        """
+        for item, amount in items.items():
+            self.player.inventory[item] = int(amount)
 
     def render(self, size: int = 256) -> np.ndarray:
-        """Frame RGB grande para video/ventana (la obs del agente es 64x64)."""
+        """Frame RGB grande para video/ventana (la obs del agente es 64x64).
+
+        Parameters
+        ----------
+        size : int, optional
+            Lado del frame en píxeles.
+
+        Returns
+        -------
+        np.ndarray
+            Imagen (size, size, 3) uint8.
+        """
         return self.env.render((size, size))

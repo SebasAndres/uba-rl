@@ -19,26 +19,79 @@ Goal = tuple[str, str, int]
 
 @dataclass(frozen=True)
 class Mission:
+    """Una misión del LLM planificador.
+
+    Attributes
+    ----------
+    key : str
+        Identificador corto (ej. "espada_piedra").
+    text : str
+        Enunciado en castellano que se le muestra al LLM.
+    goals : tuple of Goal
+        Objetivos estructurados ("item" | "achievement", nombre, cantidad).
+    split : str
+        "train" o "test".
+    extra_check : callable or None
+        Chequeo adicional para misiones compuestas (ej. mesa y horno juntos).
+    """
+
     key: str
     text: str
     goals: tuple[Goal, ...]
-    split: str                                   # "train" | "test"
+    split: str
     extra_check: Callable[[dict], bool] | None = field(default=None, compare=False)
 
     def check(self, info: dict) -> bool:
-        ok = all(_goal_met(g, info) for g in self.goals)
-        return ok and (self.extra_check is None or self.extra_check(info))
+        """Indica si la misión está cumplida.
+
+        Parameters
+        ----------
+        info : dict
+            `info` de Crafter.
+
+        Returns
+        -------
+        bool
+            True si se cumplen todos los goals y el chequeo extra (si lo hay).
+        """
+        goals_met = all(_goal_met(goal, info) for goal in self.goals)
+        return goals_met and (self.extra_check is None or self.extra_check(info))
 
 
 def _goal_met(goal: Goal, info: dict) -> bool:
-    kind, name, n = goal
-    src = info["inventory"] if kind == "item" else info["achievements"]
-    return src.get(name, 0) >= n
+    """Indica si se cumple un goal individual.
+
+    Parameters
+    ----------
+    goal : Goal
+        Tupla (tipo, nombre, cantidad).
+    info : dict
+        `info` de Crafter.
+
+    Returns
+    -------
+    bool
+        True si el inventario/logro `nombre` alcanza `cantidad`.
+    """
+    kind, name, amount = goal
+    counters = info["inventory"] if kind == "item" else info["achievements"]
+    return counters.get(name, 0) >= amount
 
 
 # ----------------------------------------------------------- chequeos compuestos
 def _has_base(info: dict) -> bool:
-    """Base: mesa y horno a <= 2 celdas del jugador."""
+    """Base: mesa y horno a <= 2 celdas del jugador.
+
+    Parameters
+    ----------
+    info : dict
+        `info` de Crafter.
+
+    Returns
+    -------
+    bool
+        True si hay una mesa y un horno cerca del jugador.
+    """
     sem, pos = info["semantic"], info["player_pos"]
     return is_near(sem, pos, "table", 2) and is_near(sem, pos, "furnace", 2)
 
@@ -62,4 +115,16 @@ MISSIONS: dict[str, Mission] = {m.key: m for m in [
 
 
 def missions_by_split(split: str) -> list[Mission]:
+    """Devuelve las misiones de un split.
+
+    Parameters
+    ----------
+    split : str
+        "train" o "test".
+
+    Returns
+    -------
+    list of Mission
+        Misiones de ese split, en el orden de `MISSIONS`.
+    """
     return [m for m in MISSIONS.values() if m.split == split]

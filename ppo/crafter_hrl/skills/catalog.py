@@ -32,70 +32,78 @@ _PLACEABLE = {"mesa": "table", "horno": "furnace", "piedra": "stone"}
 _TOOL = {"pico": "pickaxe", "espada": "sword"}
 _TOOL_MAT = {"madera": "wood", "piedra": "stone", "hierro": "iron"}
 
+# Verbos cuyo logro / objetivo en el mapa no depende del objeto.
+_FIXED_ACHIEVEMENT = {"beber": "collect_drink", "comer": "eat_cow", "dormir": "wake_up",
+                      "pelear": "defeat_zombie"}
+_FIXED_TARGET = {"beber": "water", "comer": "cow", "pelear": "zombie", "fabricar": "table"}
+
+SLEEP_TIMEOUT = 300    # dormir dura hasta que la energía llega al máximo
+DEFAULT_TIMEOUT = 100
+MAX_VITAL = 9
+
 
 @dataclass(frozen=True)
 class Skill:
+    """Una habilidad del catálogo, ej. ``Skill("fabricar", "pico", "madera")``.
+
+    Attributes
+    ----------
+    verb : str
+        Verbo (ver `VERBS`).
+    obj : str or None
+        Objeto sobre el que actúa (ver `OBJECTS`).
+    material : str or None
+        Material de la herramienta, sólo para "fabricar" (ver `MATERIALS`).
+    """
+
     verb: str
     obj: str | None = None
     material: str | None = None
 
     def __str__(self) -> str:
+        """Sintaxis que escribe el LLM, ej. "fabricar(pico, madera)"."""
         args = [a for a in (self.obj, self.material) if a]
         return f"{self.verb}({', '.join(args)})"
 
     # ---------------------------------------------------------------- crafter
     @property
     def achievement(self) -> str:
-        """Logro de Crafter cuyo contador sube cuando la habilidad se cumple.
+        """str: logro de Crafter cuyo contador sube cuando la habilidad se cumple.
 
-        Usamos los contadores de info["achievements"] en lugar del inventario
+        Se usan los contadores de info["achievements"] en lugar del inventario
         porque el inventario satura en 9 y se consume (ej. la madera al fabricar).
         """
-        v, o = self.verb, self.obj
-        if v == "recolectar":
-            return f"collect_{_RESOURCE[o]}"
-        if v == "beber":
-            return "collect_drink"
-        if v == "comer":
-            return "eat_cow"
-        if v == "dormir":
-            return "wake_up"
-        if v == "pelear":
-            return "defeat_zombie"
-        if v == "colocar":
-            return f"place_{_PLACEABLE[o]}"
-        if v == "fabricar":
+        if self.verb in _FIXED_ACHIEVEMENT:
+            return _FIXED_ACHIEVEMENT[self.verb]
+        if self.verb == "recolectar":
+            return f"collect_{_RESOURCE[self.obj]}"
+        if self.verb == "colocar":
+            return f"place_{_PLACEABLE[self.obj]}"
+        if self.verb == "fabricar":
             return f"make_{self.crafted_item}"
         raise ValueError(self)
 
     @property
     def crafted_item(self) -> str:
+        """str: ítem de Crafter que produce "fabricar", ej. "wood_pickaxe"."""
         return f"{_TOOL_MAT[self.material]}_{_TOOL[self.obj]}"
 
     @property
     def target(self) -> str | None:
-        """Material/objeto del mundo al que hay que ir (para navegación scripteada)."""
-        v = self.verb
-        if v == "recolectar":
+        """str or None: material/objeto del mundo al que hay que ir (navegación scripteada)."""
+        if self.verb == "recolectar":
             return _RESOURCE_MAT[self.obj]
-        if v == "beber":
-            return "water"
-        if v == "comer":
-            return "cow"
-        if v == "pelear":
-            return "zombie"
-        if v == "fabricar":
-            return "table"
-        return None
+        return _FIXED_TARGET.get(self.verb)
 
     @property
     def place_name(self) -> str:
+        """str: nombre interno de lo que coloca "colocar", ej. "table"."""
         return _PLACEABLE[self.obj]
 
     @property
     def timeout(self) -> int:
-        # Dormir dura hasta que la energía llega al máximo: necesita más pasos.
-        return 300 if self.verb == "dormir" else 100
+        """int: pasos primitivos máximos para cumplir la habilidad."""
+        return SLEEP_TIMEOUT if self.verb == "dormir" else DEFAULT_TIMEOUT
 
 
 SKILLS: list[Skill] = (
@@ -108,7 +116,18 @@ SKILL_NAMES = [str(s) for s in SKILLS]
 
 
 def encode(skill: Skill) -> np.ndarray:
-    """Skill -> goal_vec (float32, GOAL_DIM)."""
+    """Codifica una habilidad como goal_vec (entrada del agente PPO).
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad a codificar.
+
+    Returns
+    -------
+    np.ndarray
+        Vector float32 de largo GOAL_DIM: [one-hot verbo | one-hot objeto | one-hot material].
+    """
     vec = np.zeros(GOAL_DIM, np.float32)
     vec[VERBS.index(skill.verb)] = 1.0
     if skill.obj is not None:
@@ -119,6 +138,22 @@ def encode(skill: Skill) -> np.ndarray:
 
 
 def succeeded(skill: Skill, prev_achievements: dict, achievements: dict) -> bool:
+    """Indica si la habilidad se cumplió entre dos instantes.
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad en ejecución.
+    prev_achievements : dict
+        Contadores de logros al empezar la habilidad.
+    achievements : dict
+        Contadores de logros actuales.
+
+    Returns
+    -------
+    bool
+        True si subió el contador del logro asociado a la habilidad.
+    """
     key = skill.achievement
     return achievements.get(key, 0) > prev_achievements.get(key, 0)
 
@@ -128,6 +163,18 @@ def missing_requirements(skill: Skill, inventory: dict) -> dict[str, int]:
 
     Sólo mira el inventario. Que haya una mesa cerca / un árbol a la vista lo
     resuelve la habilidad (caminando) o falla por timeout.
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad a chequear.
+    inventory : dict
+        Inventario actual (info["inventory"]).
+
+    Returns
+    -------
+    dict of str to int
+        Cantidad faltante por ítem; vacío si no falta nada.
     """
     need: dict[str, int] = {}
     if skill.verb == "recolectar":
@@ -136,15 +183,43 @@ def missing_requirements(skill: Skill, inventory: dict) -> dict[str, int]:
         need = dict(PLACE[skill.place_name]["uses"])
     elif skill.verb == "fabricar":
         need = dict(MAKE[skill.crafted_item]["uses"])
-    return {k: v - inventory.get(k, 0) for k, v in need.items() if inventory.get(k, 0) < v}
+    return {item: amount - inventory.get(item, 0)
+            for item, amount in need.items() if inventory.get(item, 0) < amount}
 
 
 def is_feasible(skill: Skill, inventory: dict) -> bool:
+    """Indica si la habilidad se puede intentar con el inventario actual.
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad a chequear.
+    inventory : dict
+        Inventario actual (info["inventory"]).
+
+    Returns
+    -------
+    bool
+        True si no falta ningún ítem (dormir sólo si la energía no está al máximo).
+    """
     if skill.verb == "dormir":
-        return inventory.get("energy", 0) < 9
+        return inventory.get("energy", 0) < MAX_VITAL
     return not missing_requirements(skill, inventory)
 
 
 def stations_needed(skill: Skill) -> list[str]:
-    """Estaciones (table/furnace) que tienen que estar a 1 celda para fabricar."""
-    return list(MAKE[skill.crafted_item]["nearby"]) if skill.verb == "fabricar" else []
+    """Estaciones (table/furnace) que tienen que estar a 1 celda para fabricar.
+
+    Parameters
+    ----------
+    skill : Skill
+        Habilidad a chequear.
+
+    Returns
+    -------
+    list of str
+        Estaciones necesarias; vacío si la habilidad no es "fabricar".
+    """
+    if skill.verb != "fabricar":
+        return []
+    return list(MAKE[skill.crafted_item]["nearby"])

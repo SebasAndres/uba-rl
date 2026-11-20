@@ -19,53 +19,185 @@ DO = ACTION_ID["do"]
 SLEEP = ACTION_ID["sleep"]
 NOOP = ACTION_ID["noop"]
 _DIRS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+_EXPLORE_TURN_PROB = 0.05  # prob. de cambiar de dirección al azar mientras explora
+
+
+def _inside(semantic: np.ndarray, x: int, y: int) -> bool:
+    """Indica si (x, y) está dentro del mapa.
+
+    Parameters
+    ----------
+    semantic : np.ndarray
+        Mapa semántico [x, y] de ids.
+    x, y : int
+        Celda a chequear.
+
+    Returns
+    -------
+    bool
+        True si la celda existe en el mapa.
+    """
+    return 0 <= x < semantic.shape[0] and 0 <= y < semantic.shape[1]
+
+
+def _cell_name(semantic: np.ndarray, x: int, y: int) -> str | None:
+    """Nombre de lo que hay en la celda (x, y), o None si está fuera del mapa.
+
+    Parameters
+    ----------
+    semantic : np.ndarray
+        Mapa semántico [x, y] de ids.
+    x, y : int
+        Celda a consultar.
+
+    Returns
+    -------
+    str or None
+        Nombre interno de Crafter (ej. "tree"), o None.
+    """
+    if not _inside(semantic, x, y):
+        return None
+    return ID_TO_NAME.get(int(semantic[x, y]))
+
+
+def _move_action(direction: tuple[int, int]) -> int:
+    """Acción de movimiento hacia `direction`.
+
+    Parameters
+    ----------
+    direction : tuple of int
+        Paso (dx, dy) en una de las 4 direcciones.
+
+    Returns
+    -------
+    int
+        Índice de la acción "move_*" correspondiente.
+    """
+    return ACTION_ID[DIR_TO_MOVE[direction]]
 
 
 class ScriptedSkillPolicy:
+    """Agente de habilidades scripteado, con la misma interfaz que `PPOSkillPolicy`.
+
+    Parameters
+    ----------
+    search_radius : int, optional
+        Radio máximo (Manhattan) del BFS para buscar objetivos.
+    seed : int, optional
+        Semilla para las decisiones aleatorias (exploración, dónde colocar).
+    """
+
     name = "scripted"
 
-    def __init__(self, search_radius: int = 12, seed: int = 0):
+    def __init__(self, search_radius: int = 12, seed: int = 0) -> None:
         self.search_radius = search_radius
         self.rng = np.random.default_rng(seed)
         self._explore_dir = (1, 0)
-        self._last_pos = None
+        self._last_pos: tuple[int, int] | None = None
 
     def reset(self, skill: Skill) -> None:
+        """Sortea una dirección de exploración nueva para la habilidad.
+
+        Parameters
+        ----------
+        skill : Skill
+            Habilidad que se va a ejecutar (no se usa).
+        """
         self._explore_dir = _DIRS[self.rng.integers(4)]
         self._last_pos = None
 
     def act(self, env: CrafterEnv, obs: np.ndarray, info: dict, skill: Skill) -> int:
-        v = skill.verb
-        if v == "dormir":
+        """Elige la próxima acción primitiva para la habilidad.
+
+        Parameters
+        ----------
+        env : CrafterEnv
+            Entorno (se lee hacia dónde mira el jugador).
+        obs : np.ndarray
+            Imagen RGB (no se usa: el script lee el mapa semántico).
+        info : dict
+            `info` actual de Crafter.
+        skill : Skill
+            Habilidad en ejecución.
+
+        Returns
+        -------
+        int
+            Índice de la acción primitiva.
+        """
+        if skill.verb == "dormir":
             return SLEEP
-        if v == "colocar":
+        if skill.verb == "colocar":
             return self._place(env, info, skill)
-        if v == "fabricar":
-            sem, pos = info["semantic"], info["player_pos"]
-            missing = [s for s in stations_needed(skill) if not is_near(sem, pos, s, radius=1)]
-            if not missing:
-                return ACTION_ID[f"make_{skill.crafted_item}"]
-            return self._goto(env, info, missing[0], interact=False)
-        if v == "recolectar" and skill.obj == "brote":
+        if skill.verb == "fabricar":
+            return self._craft(env, info, skill)
+        if skill.verb == "recolectar" and skill.obj == "brote":
             # El pasto es caminable: no se "llega al lado", se golpea el de enfrente.
             return DO if self._facing_name(env, info) == "grass" else self._explore(info)
         return self._goto(env, info, skill.target, interact=True)
 
     # ------------------------------------------------------------------ helpers
-    def _facing_cell(self, env, info):
+    def _facing_name(self, env: CrafterEnv, info: dict) -> str | None:
+        """Nombre de lo que hay en la celda que mira el jugador.
+
+        Parameters
+        ----------
+        env : CrafterEnv
+            Entorno (de ahí sale la orientación).
+        info : dict
+            `info` actual de Crafter.
+
+        Returns
+        -------
+        str or None
+            Nombre interno de Crafter, o None si mira fuera del mapa.
+        """
         x, y = info["player_pos"]
         fx, fy = env.facing
-        return int(x + fx), int(y + fy)
+        return _cell_name(info["semantic"], int(x + fx), int(y + fy))
 
-    def _facing_name(self, env, info):
-        sem = info["semantic"]
-        cx, cy = self._facing_cell(env, info)
-        if not (0 <= cx < sem.shape[0] and 0 <= cy < sem.shape[1]):
-            return None
-        return ID_TO_NAME.get(int(sem[cx, cy]))
+    def _craft(self, env: CrafterEnv, info: dict, skill: Skill) -> int:
+        """Fabrica si las estaciones están al lado; si no, camina hacia la que falta.
 
-    def _goto(self, env, info, target: str, interact: bool) -> int:
-        """Caminar hasta quedar al lado de `target`, mirarlo y (opcional) golpearlo."""
+        Parameters
+        ----------
+        env : CrafterEnv
+            Entorno.
+        info : dict
+            `info` actual de Crafter.
+        skill : Skill
+            Habilidad "fabricar(...)".
+
+        Returns
+        -------
+        int
+            Acción "make_*" o de movimiento.
+        """
+        sem, pos = info["semantic"], info["player_pos"]
+        missing = [s for s in stations_needed(skill) if not is_near(sem, pos, s, radius=1)]
+        if not missing:
+            return ACTION_ID[f"make_{skill.crafted_item}"]
+        return self._goto(env, info, missing[0], interact=False)
+
+    def _goto(self, env: CrafterEnv, info: dict, target: str, interact: bool) -> int:
+        """Camina hasta quedar al lado de `target`, lo mira y (opcional) lo golpea.
+
+        Parameters
+        ----------
+        env : CrafterEnv
+            Entorno.
+        info : dict
+            `info` actual de Crafter.
+        target : str
+            Material u objeto destino (ej. "tree").
+        interact : bool
+            Si es True, golpea (`do`) al llegar.
+
+        Returns
+        -------
+        int
+            Acción primitiva.
+        """
         if interact and self._facing_name(env, info) == target:
             return DO
         sem, pos = info["semantic"], info["player_pos"]
@@ -73,36 +205,75 @@ class ScriptedSkillPolicy:
         if path is None:
             return self._explore(info)
         if path:
-            return ACTION_ID[DIR_TO_MOVE[path[0]]]
+            return _move_action(path[0])
         # Ya estamos al lado: girar hacia el objetivo (no se mueve porque está ocupado).
-        d = (cell[0] - int(pos[0]), cell[1] - int(pos[1]))
-        return ACTION_ID[DIR_TO_MOVE[d]] if interact else NOOP
+        direction = (cell[0] - int(pos[0]), cell[1] - int(pos[1]))
+        return _move_action(direction) if interact else NOOP
 
-    def _place(self, env, info, skill: Skill) -> int:
-        where = PLACE[skill.place_name]["where"]
-        if self._facing_name(env, info) in where:
+    def _place(self, env: CrafterEnv, info: dict, skill: Skill) -> int:
+        """Coloca el objeto si la celda de enfrente lo permite; si no, gira o explora.
+
+        Parameters
+        ----------
+        env : CrafterEnv
+            Entorno.
+        info : dict
+            `info` actual de Crafter.
+        skill : Skill
+            Habilidad "colocar(...)".
+
+        Returns
+        -------
+        int
+            Acción "place_*", de giro o de exploración.
+        """
+        allowed = PLACE[skill.place_name]["where"]
+        if self._facing_name(env, info) in allowed:
             return ACTION_ID[f"place_{skill.place_name}"]
-        # Girar hacia algún vecino donde se pueda colocar.
         sem, (x, y) = info["semantic"], info["player_pos"]
-        options = [d for d in _DIRS
-                   if 0 <= x + d[0] < sem.shape[0] and 0 <= y + d[1] < sem.shape[1]
-                   and ID_TO_NAME.get(int(sem[x + d[0], y + d[1]])) in where]
+        options = [d for d in _DIRS if _cell_name(sem, x + d[0], y + d[1]) in allowed]
         if options:
-            return ACTION_ID[DIR_TO_MOVE[options[self.rng.integers(len(options))]]]
+            return _move_action(options[self.rng.integers(len(options))])
         return self._explore(info)
 
-    def _explore(self, info) -> int:
-        """Caminata con dirección persistente; cambia si se traba o al azar."""
+    def _is_unsafe(self, semantic: np.ndarray, pos: tuple[int, int], direction: tuple[int, int]) -> bool:
+        """Indica si dar un paso en `direction` sale del mapa o pisa lava.
+
+        Parameters
+        ----------
+        semantic : np.ndarray
+            Mapa semántico [x, y] de ids.
+        pos : tuple of int
+            Posición del jugador.
+        direction : tuple of int
+            Paso (dx, dy).
+
+        Returns
+        -------
+        bool
+            True si la celda destino no existe o es lava.
+        """
+        x, y = pos[0] + direction[0], pos[1] + direction[1]
+        return not _inside(semantic, x, y) or _cell_name(semantic, x, y) == "lava"
+
+    def _explore(self, info: dict) -> int:
+        """Caminata con dirección persistente; cambia si se traba, hay lava o al azar.
+
+        Parameters
+        ----------
+        info : dict
+            `info` actual de Crafter.
+
+        Returns
+        -------
+        int
+            Acción de movimiento.
+        """
         pos = tuple(int(v) for v in info["player_pos"])
         sem = info["semantic"]
-
-        def lava(d):
-            x, y = pos[0] + d[0], pos[1] + d[1]
-            inside = 0 <= x < sem.shape[0] and 0 <= y < sem.shape[1]
-            return not inside or ID_TO_NAME.get(int(sem[x, y])) == "lava"
-
-        if pos == self._last_pos or lava(self._explore_dir) or self.rng.random() < 0.05:
-            safe = [d for d in _DIRS if not lava(d)] or _DIRS
+        stuck = pos == self._last_pos
+        if stuck or self._is_unsafe(sem, pos, self._explore_dir) or self.rng.random() < _EXPLORE_TURN_PROB:
+            safe = [d for d in _DIRS if not self._is_unsafe(sem, pos, d)] or _DIRS
             self._explore_dir = safe[self.rng.integers(len(safe))]
         self._last_pos = pos
-        return ACTION_ID[DIR_TO_MOVE[self._explore_dir]]
+        return _move_action(self._explore_dir)

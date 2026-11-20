@@ -35,11 +35,38 @@ sys.path.insert(0, str(ROOT))
 
 from crafter_hrl.planner.llm import DEFAULT_BASE_MODEL  # noqa: E402
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
+
+def parse_args() -> argparse.Namespace:
+    """Lee los argumentos de la línea de comandos.
+
+    Returns
+    -------
+    argparse.Namespace
+        `base_model`, `data`, `out` y `load_in_4bit`.
+    """
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     p.add_argument("--data", default=str(ROOT / "data/sft/train.jsonl"))
     p.add_argument("--out", default=str(ROOT / "checkpoints/llm/sft"))
     p.add_argument("--load-in-4bit", action="store_true", help="QLoRA si no entra en la GPU")
-    args = p.parse_args()
+    return p.parse_args()
+
+
+def main(args: argparse.Namespace) -> None:
+    """Entrena el adapter LoRA con SFT (sin implementar: ver el docstring del módulo).
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Argumentos de la línea de comandos.
+
+    Raises
+    ------
+    NotImplementedError
+        Siempre, hasta que se implemente el entrenamiento.
+    """
     raise NotImplementedError("TODO(C): implementar el SFT siguiendo el docstring.")
+
+
+if __name__ == "__main__":
+    main(parse_args())

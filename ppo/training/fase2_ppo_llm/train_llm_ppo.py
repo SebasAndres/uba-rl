@@ -47,8 +47,16 @@ from crafter_hrl.factory import LLM_SFT, build_skill_policy  # noqa: E402,F401
 from crafter_hrl.missions import missions_by_split  # noqa: E402,F401
 from crafter_hrl.planner.llm import DEFAULT_BASE_MODEL, build_messages  # noqa: E402,F401
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
+
+def parse_args() -> argparse.Namespace:
+    """Lee los argumentos de la línea de comandos.
+
+    Returns
+    -------
+    argparse.Namespace
+        Hiperparámetros del PPO del LLM.
+    """
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     p.add_argument("--init-adapter", default=str(LLM_SFT), help="arrancar desde el SFT")
     p.add_argument("--skills", default="ppo", choices=["ppo", "scripted"])
@@ -61,10 +69,43 @@ if __name__ == "__main__":
     p.add_argument("--kl-coef", type=float, default=0.05)
     p.add_argument("--lr", type=float, default=1e-5)
     p.add_argument("--prerequisite-bonus", type=float, default=0.0, help="0.2 para el shaping opcional")
-    args = p.parse_args()
+    return p.parse_args()
 
-    # Esto ya funciona: el entorno de turnos con el agente congelado.
+
+def make_env(args: argparse.Namespace) -> PlannerEnv:
+    """Entorno de turnos con el agente de habilidades congelado (esto ya funciona).
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Argumentos (agente, límites, shaping).
+
+    Returns
+    -------
+    PlannerEnv
+        Entorno sobre las misiones de train.
+    """
     skills = build_skill_policy(args.skills)
-    env = PlannerEnv(skills, missions=missions_by_split("train"), max_env_steps=args.max_env_steps,
-                     rewards=RewardConfig(prerequisite=args.prerequisite_bonus))
+    return PlannerEnv(skills, missions=missions_by_split("train"), max_env_steps=args.max_env_steps,
+                      rewards=RewardConfig(prerequisite=args.prerequisite_bonus))
+
+
+def main(args: argparse.Namespace) -> None:
+    """Entrena el LLM con PPO multi-turno (sin implementar: ver el docstring del módulo).
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Argumentos de la línea de comandos.
+
+    Raises
+    ------
+    NotImplementedError
+        Siempre, hasta que se implemente el loop.
+    """
+    env = make_env(args)  # noqa: F841
     raise NotImplementedError("TODO(C): rollout + GAE por turno + update PPO (ver docstring).")
+
+
+if __name__ == "__main__":
+    main(parse_args())
